@@ -1,8 +1,9 @@
 /**
- * Email sending via transactional providers and custom SMTP.
- * API keys and passwords are fetched from SecretsProvider.
+ * Email sending via transactional providers, OAuth (Gmail/Microsoft), and custom SMTP.
+ * API keys, refresh tokens, and passwords are fetched from SecretsProvider.
  */
 
+import { google } from "googleapis";
 import nodemailer from "nodemailer";
 
 export interface SendEmailParams {
@@ -104,4 +105,124 @@ export async function sendViaSmtp(
     replyTo: params.replyTo,
   });
   return { messageId: info.messageId ?? "unknown" };
+}
+
+/** Options for Gmail send (OAuth). redirectUri must match app registration. */
+export interface SendViaGmailOptions {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  refreshToken: string;
+}
+
+/**
+ * Send via Gmail API using OAuth refresh token.
+ */
+export async function sendViaGmail(
+  options: SendViaGmailOptions,
+  params: SendEmailParams
+): Promise<{ messageId: string }> {
+  const oauth2 = new google.auth.OAuth2(
+    options.clientId,
+    options.clientSecret,
+    options.redirectUri
+  );
+  oauth2.setCredentials({ refresh_token: options.refreshToken });
+  const gmail = google.gmail({ version: "v1", auth: oauth2 });
+
+  const lines: string[] = [
+    `From: ${params.from}`,
+    `To: ${params.to}`,
+    `Subject: ${params.subject}`,
+    "MIME-Version: 1.0",
+  ];
+  if (params.replyTo) lines.push(`Reply-To: ${params.replyTo}`);
+  if (params.bodyHtml) {
+    lines.push("Content-Type: text/html; charset=UTF-8");
+  } else {
+    lines.push("Content-Type: text/plain; charset=UTF-8");
+  }
+  lines.push("");
+  lines.push(params.bodyHtml ?? params.bodyText ?? "");
+
+  const raw = Buffer.from(lines.join("\r\n"))
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  const res = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw },
+  });
+  const messageId = res.data.id ?? "unknown";
+  return { messageId };
+}
+
+/** Options for Microsoft Graph send (OAuth). */
+export interface SendViaMicrosoftOptions {
+  clientId: string;
+  clientSecret: string;
+  tenantId: string;
+  refreshToken: string;
+}
+
+/**
+ * Send via Microsoft Graph /me/sendMail using OAuth refresh token.
+ */
+export async function sendViaMicrosoft(
+  options: SendViaMicrosoftOptions,
+  params: SendEmailParams
+): Promise<{ messageId: string }> {
+  const body = new URLSearchParams({
+    client_id: options.clientId,
+    client_secret: options.clientSecret,
+    refresh_token: options.refreshToken,
+    grant_type: "refresh_token",
+  });
+  const tokenRes = await fetch(
+    `https://login.microsoftonline.com/${options.tenantId}/oauth2/v2.0/token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    }
+  );
+  if (!tokenRes.ok) {
+    const text = await tokenRes.text();
+    throw new Error(`Microsoft token refresh failed: ${tokenRes.status} ${text}`);
+  }
+  const tokenData = (await tokenRes.json()) as { access_token: string };
+  const accessToken = tokenData.access_token;
+
+  const graphBody = {
+    message: {
+      subject: params.subject,
+      body: {
+        contentType: params.bodyHtml ? "HTML" : "Text",
+        content: params.bodyHtml ?? params.bodyText ?? "",
+      },
+      toRecipients: [{ emailAddress: { address: params.to } }],
+      from: undefined as { emailAddress: { address: string } } | undefined,
+      replyTo: undefined as { emailAddress: { address: string } }[] | undefined,
+    },
+  };
+  graphBody.message.from = { emailAddress: { address: params.from } };
+  if (params.replyTo) {
+    graphBody.message.replyTo = [{ emailAddress: { address: params.replyTo } }];
+  }
+
+  const sendRes = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(graphBody),
+  });
+  if (!sendRes.ok) {
+    const text = await sendRes.text();
+    throw new Error(`Microsoft Graph sendMail failed: ${sendRes.status} ${text}`);
+  }
+  return { messageId: `graph-${Date.now()}` };
 }

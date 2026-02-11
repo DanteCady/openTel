@@ -44,8 +44,22 @@ import {
   setAgentState,
 } from "@opentel/storage";
 import { createSecretsProvider } from "@opentel/secrets";
-import { sendViaSendGrid, sendViaMailgun, sendViaSmtp } from "./email-send.js";
+import {
+  sendViaSendGrid,
+  sendViaMailgun,
+  sendViaSmtp,
+  sendViaGmail,
+  sendViaMicrosoft,
+} from "./email-send.js";
 import { sendViaTwilio } from "./sms-send.js";
+import {
+  getGmailAuthUrl,
+  exchangeGmailCode,
+  parseGmailState,
+  getMicrosoftAuthUrl,
+  exchangeMicrosoftCode,
+  parseMicrosoftState,
+} from "./oauth.js";
 import {
   CreateTenantInputSchema,
   CreateEndpointInputSchema,
@@ -554,7 +568,9 @@ app.get("/v1/tenants/:tenantId/chat/threads/:threadId/messages", async (req, rep
   );
 });
 
-// --- Email channel ---
+// --- Email channel & OAuth ---
+
+const apiBaseUrl = process.env.API_BASE_URL ?? `http://localhost:${port}`;
 
 function getSecrets() {
   try {
@@ -567,6 +583,134 @@ function getSecrets() {
     );
   }
 }
+
+// Gmail OAuth: start (redirect to Google) and callback (exchange code, store refresh_token)
+app.get("/v1/auth/gmail/start", async (req, reply) => {
+  const query = (req as { query?: { tenantId?: string; redirect_uri?: string } }).query;
+  const tenantId = query?.tenantId;
+  if (!tenantId || !UUID_REGEX.test(tenantId)) {
+    throw new OpenTelError("VALIDATION_ERROR", "tenantId (UUID) is required");
+  }
+  const tenant = await getTenant(db, tenantId);
+  if (!tenant) {
+    throw new OpenTelError("TENANT_NOT_FOUND", "Tenant not found", { tenantId });
+  }
+  const clientId = process.env.GMAIL_CLIENT_ID;
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new OpenTelError(
+      "CONFIG_ERROR",
+      "Gmail OAuth not configured. Set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET."
+    );
+  }
+  const redirectUri = `${apiBaseUrl.replace(/\/$/, "")}/v1/auth/gmail/callback`;
+  const url = getGmailAuthUrl(
+    { clientId, clientSecret, redirectUri },
+    tenantId,
+    query?.redirect_uri
+  );
+  return reply.redirect(302, url);
+});
+
+app.get("/v1/auth/gmail/callback", async (req, reply) => {
+  const query = (req as { query?: { code?: string; state?: string } }).query;
+  const code = query?.code;
+  const state = query?.state;
+  if (!code || !state) {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=missing_code_or_state`);
+  }
+  const { tenantId, successRedirectUri } = parseGmailState(state);
+  if (!UUID_REGEX.test(tenantId)) {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=invalid_state`);
+  }
+  const tenant = await getTenant(db, tenantId);
+  if (!tenant) {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=tenant_not_found`);
+  }
+  const clientId = process.env.GMAIL_CLIENT_ID;
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=oauth_not_configured`);
+  }
+  const redirectUri = `${apiBaseUrl.replace(/\/$/, "")}/v1/auth/gmail/callback`;
+  try {
+    const { refreshToken } = await exchangeGmailCode(
+      { clientId, clientSecret, redirectUri },
+      code
+    );
+    const secrets = getSecrets();
+    await secrets.set(tenantId, "email_gmail_refresh_token", refreshToken);
+  } catch {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=token_exchange_failed`);
+  }
+  const successUrl = successRedirectUri ?? `${apiBaseUrl}/auth/success`;
+  return reply.redirect(302, successUrl);
+});
+
+// Microsoft OAuth: start and callback
+app.get("/v1/auth/microsoft/start", async (req, reply) => {
+  const query = (req as { query?: { tenantId?: string; redirect_uri?: string } }).query;
+  const tenantId = query?.tenantId;
+  if (!tenantId || !UUID_REGEX.test(tenantId)) {
+    throw new OpenTelError("VALIDATION_ERROR", "tenantId (UUID) is required");
+  }
+  const tenant = await getTenant(db, tenantId);
+  if (!tenant) {
+    throw new OpenTelError("TENANT_NOT_FOUND", "Tenant not found", { tenantId });
+  }
+  const clientId = process.env.MICROSOFT_CLIENT_ID;
+  const clientSecret = process.env.MICROSOFT_CLIENT_SECRET;
+  const tenantIdAzure = process.env.MICROSOFT_TENANT_ID ?? "common";
+  if (!clientId || !clientSecret) {
+    throw new OpenTelError(
+      "CONFIG_ERROR",
+      "Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET."
+    );
+  }
+  const redirectUri = `${apiBaseUrl.replace(/\/$/, "")}/v1/auth/microsoft/callback`;
+  const url = await getMicrosoftAuthUrl(
+    { clientId, clientSecret, tenantId: tenantIdAzure, redirectUri },
+    tenantId,
+    query?.redirect_uri
+  );
+  return reply.redirect(302, url);
+});
+
+app.get("/v1/auth/microsoft/callback", async (req, reply) => {
+  const query = (req as { query?: { code?: string; state?: string } }).query;
+  const code = query?.code;
+  const state = query?.state;
+  if (!code || !state) {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=missing_code_or_state`);
+  }
+  const { tenantId, successRedirectUri } = parseMicrosoftState(state);
+  if (!UUID_REGEX.test(tenantId)) {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=invalid_state`);
+  }
+  const tenant = await getTenant(db, tenantId);
+  if (!tenant) {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=tenant_not_found`);
+  }
+  const clientId = process.env.MICROSOFT_CLIENT_ID;
+  const clientSecret = process.env.MICROSOFT_CLIENT_SECRET;
+  const tenantIdAzure = process.env.MICROSOFT_TENANT_ID ?? "common";
+  if (!clientId || !clientSecret) {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=oauth_not_configured`);
+  }
+  const redirectUri = `${apiBaseUrl.replace(/\/$/, "")}/v1/auth/microsoft/callback`;
+  try {
+    const { refreshToken } = await exchangeMicrosoftCode(
+      { clientId, clientSecret, tenantId: tenantIdAzure, redirectUri },
+      code
+    );
+    const secrets = getSecrets();
+    await secrets.set(tenantId, "email_microsoft_refresh_token", refreshToken);
+  } catch {
+    return reply.redirect(302, `${apiBaseUrl}/auth/error?message=token_exchange_failed`);
+  }
+  const successUrl = successRedirectUri ?? `${apiBaseUrl}/auth/success`;
+  return reply.redirect(302, successUrl);
+});
 
 app.patch("/v1/tenants/:tenantId/channels/email", async (req, reply) => {
   requireAuth(req);
@@ -581,7 +725,7 @@ app.patch("/v1/tenants/:tenantId/channels/email", async (req, reply) => {
       password?: string;
     };
   }).body;
-  const allowed = ["sendgrid", "mailgun", "smtp"];
+  const allowed = ["sendgrid", "mailgun", "gmail", "microsoft", "smtp"];
   if (!body?.provider || !allowed.includes(body.provider)) {
     throw new OpenTelError(
       "VALIDATION_ERROR",
@@ -693,6 +837,64 @@ app.post("/v1/tenants/:tenantId/email/send", async (req, reply) => {
       bodyText: body.bodyText,
       bodyHtml: body.bodyHtml,
     });
+    messageId = result.messageId;
+  } else if (channelConfig.provider === "gmail") {
+    const refreshToken = await secrets.get(tenantId, "email_gmail_refresh_token");
+    if (!refreshToken) {
+      throw new OpenTelError(
+        "CONFIG_ERROR",
+        "Gmail not connected. Complete OAuth flow: GET /v1/auth/gmail/start?tenantId=...",
+        { tenantId }
+      );
+    }
+    const clientId = process.env.GMAIL_CLIENT_ID;
+    const clientSecret = process.env.GMAIL_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      throw new OpenTelError(
+        "CONFIG_ERROR",
+        "Gmail OAuth not configured. Set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET."
+      );
+    }
+    const redirectUri = `${apiBaseUrl.replace(/\/$/, "")}/v1/auth/gmail/callback`;
+    const result = await sendViaGmail(
+      { clientId, clientSecret, redirectUri, refreshToken },
+      {
+        to: body.to,
+        from,
+        subject: body.subject,
+        bodyText: body.bodyText,
+        bodyHtml: body.bodyHtml,
+      }
+    );
+    messageId = result.messageId;
+  } else if (channelConfig.provider === "microsoft") {
+    const refreshToken = await secrets.get(tenantId, "email_microsoft_refresh_token");
+    if (!refreshToken) {
+      throw new OpenTelError(
+        "CONFIG_ERROR",
+        "Microsoft 365 not connected. Complete OAuth flow: GET /v1/auth/microsoft/start?tenantId=...",
+        { tenantId }
+      );
+    }
+    const clientId = process.env.MICROSOFT_CLIENT_ID;
+    const clientSecret = process.env.MICROSOFT_CLIENT_SECRET;
+    const tenantIdAzure = process.env.MICROSOFT_TENANT_ID ?? "common";
+    if (!clientId || !clientSecret) {
+      throw new OpenTelError(
+        "CONFIG_ERROR",
+        "Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET."
+      );
+    }
+    const result = await sendViaMicrosoft(
+      { clientId, clientSecret, tenantId: tenantIdAzure, refreshToken },
+      {
+        to: body.to,
+        from,
+        subject: body.subject,
+        bodyText: body.bodyText,
+        bodyHtml: body.bodyHtml,
+      }
+    );
     messageId = result.messageId;
   } else if (channelConfig.provider === "smtp") {
     const password = await secrets.get(tenantId, "email_smtp_password");
