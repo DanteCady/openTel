@@ -17,6 +17,7 @@
     "lint": "turbo run lint",
     "db:migrate": "pnpm --filter @opentel/storage exec tsx src/migrate.ts",
     "autoconfigure": "./scripts/autoconfigure.sh",
+    "skip-wizard": "pnpm autoconfigure",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
   },
   "devDependencies": {

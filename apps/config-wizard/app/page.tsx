@@ -253,6 +253,7 @@ export default function ConfigWizardPage() {
   return (
     <div className={styles.root}>
       <header className={styles.header}>
+        <img src="/logo.png" alt="OpenTel" width={80} height={80} style={{ marginBottom: 12 }} />
         <h1 className={styles.logo}>OpenTel</h1>
         <p className={styles.subtitle}>Configuration Wizard</p>
       </header>

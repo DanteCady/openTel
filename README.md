@@ -1,5 +1,9 @@
 # OpenTel
 
+<p align="center">
+  <img src="assets/logo.png" alt="OpenTel" width="160" />
+</p>
+
 Open-source alternative to commercial call/contact center platforms (NICE, Genesys Cloud). Self-hostable call infrastructure with no vendor lock-in.
 
 ## Quick Start
