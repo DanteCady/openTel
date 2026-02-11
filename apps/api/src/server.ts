@@ -248,7 +248,11 @@ app.get("/v1/calls/:callId", async (req, reply) => {
   return reply.send(call);
 });
 
-app.listen({ port, host: "0.0.0.0" }, (err) => {
-  if (err) throw err;
-  console.log(`API listening on http://localhost:${port}`);
-});
+if (process.env.NODE_ENV !== "test") {
+  app.listen({ port, host: "0.0.0.0" }, (err) => {
+    if (err) throw err;
+    console.log(`API listening on http://localhost:${port}`);
+  });
+}
+
+export { app };
