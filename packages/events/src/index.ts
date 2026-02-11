@@ -1,6 +1,7 @@
 import { connect as natsConnect, type NatsConnection } from "nats";
 
-const SUBJECT = "opentel.calls";
+const CALLS_SUBJECT = "opentel.calls";
+const CHAT_SUBJECT = "opentel.chat";
 
 let nc: NatsConnection | null = null;
 
@@ -19,7 +20,11 @@ export async function publish(subject: string, payload: unknown): Promise<void> 
 }
 
 export async function publishCallEvent(event: object): Promise<void> {
-  await publish(SUBJECT, event);
+  await publish(CALLS_SUBJECT, event);
+}
+
+export async function publishChatEvent(event: object): Promise<void> {
+  await publish(CHAT_SUBJECT, event);
 }
 
 export async function subscribe(

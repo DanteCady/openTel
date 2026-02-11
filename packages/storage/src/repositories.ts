@@ -186,3 +186,96 @@ export async function listCalls(
 
   return q.execute();
 }
+
+// --- Chat ---
+
+export async function createChatThread(
+  db: Kysely<Database>,
+  tenantId: string,
+  opts?: { contactId?: string | null; metadata?: Record<string, string> | null }
+) {
+  const id = randomUUID();
+  const now = new Date();
+  await db
+    .insertInto("chat_threads")
+    .values({
+      id,
+      tenant_id: tenantId,
+      contact_id: opts?.contactId ?? null,
+      state: "open",
+      metadata: opts?.metadata ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    .execute();
+  const row = await db.selectFrom("chat_threads").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+  return row;
+}
+
+export async function getChatThread(db: Kysely<Database>, threadId: string) {
+  return db
+    .selectFrom("chat_threads")
+    .selectAll()
+    .where("id", "=", threadId)
+    .executeTakeFirst();
+}
+
+export async function listChatThreads(
+  db: Kysely<Database>,
+  tenantId: string,
+  opts?: { contactId?: string; limit?: number; offset?: number }
+) {
+  let q = db
+    .selectFrom("chat_threads")
+    .selectAll()
+    .where("tenant_id", "=", tenantId)
+    .orderBy("updated_at", "desc");
+
+  if (opts?.contactId) q = q.where("contact_id", "=", opts.contactId);
+  q = q.limit(opts?.limit ?? 50).offset(opts?.offset ?? 0);
+
+  return q.execute();
+}
+
+export async function createChatMessage(
+  db: Kysely<Database>,
+  threadId: string,
+  body: string,
+  opts?: { fromEndpointId?: string | null; metadata?: Record<string, string> | null }
+) {
+  const id = randomUUID();
+  const now = new Date();
+  await db
+    .insertInto("chat_messages")
+    .values({
+      id,
+      thread_id: threadId,
+      from_endpoint_id: opts?.fromEndpointId ?? null,
+      body,
+      metadata: opts?.metadata ?? null,
+      created_at: now,
+    })
+    .execute();
+  await db
+    .updateTable("chat_threads")
+    .set({ updated_at: now })
+    .where("id", "=", threadId)
+    .execute();
+  const row = await db.selectFrom("chat_messages").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+  return row;
+}
+
+export async function listChatMessages(
+  db: Kysely<Database>,
+  threadId: string,
+  opts?: { limit?: number; offset?: number }
+) {
+  return db
+    .selectFrom("chat_messages")
+    .selectAll()
+    .where("thread_id", "=", threadId)
+    .orderBy("created_at", "asc")
+    .limit(opts?.limit ?? 100)
+    .offset(opts?.offset ?? 0)
+    .execute();
+}

@@ -75,4 +75,45 @@ export class OpenTelServerClient {
   async getCall(callId: string) {
     return this.fetch<object>("GET", `/v1/calls/${callId}`);
   }
+
+  // --- Chat ---
+
+  async createChatThread(tenantId: string, opts?: { contactId?: string; metadata?: Record<string, string> }) {
+    return this.fetch<{
+      id: string;
+      tenantId: string;
+      contactId: string | null;
+      state: string;
+      metadata: Record<string, string> | null;
+      createdAt: string;
+      updatedAt: string;
+    }>("POST", `/v1/tenants/${tenantId}/chat/threads`, opts ?? {});
+  }
+
+  async listChatThreads(
+    tenantId: string,
+    opts?: { contactId?: string; limit?: number; offset?: number }
+  ) {
+    const params = new URLSearchParams();
+    if (opts?.contactId) params.set("contactId", opts.contactId);
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.offset) params.set("offset", String(opts.offset));
+    const q = params.toString();
+    return this.fetch<object[]>("GET", `/v1/tenants/${tenantId}/chat/threads${q ? `?${q}` : ""}`);
+  }
+
+  async getChatThread(tenantId: string, threadId: string) {
+    return this.fetch<object>("GET", `/v1/tenants/${tenantId}/chat/threads/${threadId}`);
+  }
+
+  async listChatMessages(threadId: string, tenantId: string, opts?: { limit?: number; offset?: number }) {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.offset) params.set("offset", String(opts.offset));
+    const q = params.toString();
+    return this.fetch<object[]>(
+      "GET",
+      `/v1/tenants/${tenantId}/chat/threads/${threadId}/messages${q ? `?${q}` : ""}`
+    );
+  }
 }

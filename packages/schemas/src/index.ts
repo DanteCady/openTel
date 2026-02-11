@@ -75,6 +75,16 @@ export const IceMessageSchema = z.object({
   callId: z.string().uuid(),
   candidate: z.unknown(),
 });
+export const JoinThreadMessageSchema = z.object({
+  type: z.literal("join_thread"),
+  threadId: z.string().uuid(),
+});
+export const SendMessageSchema = z.object({
+  type: z.literal("send_message"),
+  threadId: z.string().uuid(),
+  body: z.string().min(1).max(10000),
+  metadata: z.record(z.string()).optional(),
+});
 
 // --- Events ---
 export const CallCreatedEventSchema = z.object({
@@ -137,3 +147,22 @@ export const WebhookPayloadSchema = z.object({
   ts: z.string().datetime(),
 });
 export type WebhookPayload = z.infer<typeof WebhookPayloadSchema>;
+
+// --- Phase 2 PSTN config (env-based) ---
+export const Phase2ConfigSchema = z.object({
+  OPENTEL_GATEWAY_URL: z.string().optional(),
+  OPENTEL_SIP_TRUNK_HOST: z.string().optional(),
+  OPENTEL_SIP_TRUNK_PORT: z.string().optional(),
+  OPENTEL_SIP_TRUNK_USER: z.string().optional(),
+  OPENTEL_SIP_TRUNK_PASSWORD: z.string().optional(),
+});
+export type Phase2Config = z.infer<typeof Phase2ConfigSchema>;
+
+/** Env var names for Phase 2; use when building .env snippets. */
+export const PHASE2_ENV_KEYS = [
+  "OPENTEL_GATEWAY_URL",
+  "OPENTEL_SIP_TRUNK_HOST",
+  "OPENTEL_SIP_TRUNK_PORT",
+  "OPENTEL_SIP_TRUNK_USER",
+  "OPENTEL_SIP_TRUNK_PASSWORD",
+] as const;

@@ -21,6 +21,11 @@ import {
   listEndpoints,
   listCalls,
   getCall,
+  createChatThread,
+  getChatThread,
+  listChatThreads,
+  createChatMessage,
+  listChatMessages,
 } from "@opentel/storage";
 import {
   CreateTenantInputSchema,
@@ -248,6 +253,116 @@ app.get("/v1/calls/:callId", async (req, reply) => {
     });
   }
   return reply.send(call);
+});
+
+// --- Chat ---
+
+app.post("/v1/tenants/:tenantId/chat/threads", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId } = (req as { params: { tenantId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+
+  const body = (req as { body?: { contactId?: string; metadata?: Record<string, string> } }).body ?? {};
+  const thread = await createChatThread(db, tenantId, {
+    contactId: body.contactId ?? null,
+    metadata: body.metadata ?? null,
+  });
+  return reply.send({
+    id: thread.id,
+    tenantId: thread.tenant_id,
+    contactId: thread.contact_id,
+    state: thread.state,
+    metadata: thread.metadata,
+    createdAt: thread.created_at,
+    updatedAt: thread.updated_at,
+  });
+});
+
+app.get("/v1/tenants/:tenantId/chat/threads", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId } = (req as { params: { tenantId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+
+  const q = (req as { query?: { contactId?: string; limit?: string; offset?: string } }).query;
+  const threads = await listChatThreads(db, tenantId, {
+    contactId: q?.contactId,
+    limit: q?.limit ? Number(q.limit) : 50,
+    offset: q?.offset ? Number(q.offset) : 0,
+  });
+  return reply.send(
+    threads.map((t) => ({
+      id: t.id,
+      tenantId: t.tenant_id,
+      contactId: t.contact_id,
+      state: t.state,
+      metadata: t.metadata,
+      createdAt: t.created_at,
+      updatedAt: t.updated_at,
+    }))
+  );
+});
+
+app.get("/v1/tenants/:tenantId/chat/threads/:threadId", async (req, reply) => {
+  const auth = requireAuth(req);
+  const { tenantId, threadId } = (req as { params: { tenantId: string; threadId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+  validateUuid(threadId, "threadId");
+
+  const thread = await getChatThread(db, threadId);
+  if (!thread) {
+    throw new OpenTelError("THREAD_NOT_FOUND", `Thread with id '${threadId}' does not exist`, {
+      threadId,
+    });
+  }
+  if (auth.tenantId && thread.tenant_id !== auth.tenantId) {
+    throw new OpenTelError("TENANT_MISMATCH", "Token tenant does not match thread tenant", {
+      threadId,
+    });
+  }
+  return reply.send({
+    id: thread.id,
+    tenantId: thread.tenant_id,
+    contactId: thread.contact_id,
+    state: thread.state,
+    metadata: thread.metadata,
+    createdAt: thread.created_at,
+    updatedAt: thread.updated_at,
+  });
+});
+
+app.get("/v1/tenants/:tenantId/chat/threads/:threadId/messages", async (req, reply) => {
+  const auth = requireAuth(req);
+  const { tenantId, threadId } = (req as { params: { tenantId: string; threadId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+  validateUuid(threadId, "threadId");
+
+  const thread = await getChatThread(db, threadId);
+  if (!thread) {
+    throw new OpenTelError("THREAD_NOT_FOUND", `Thread with id '${threadId}' does not exist`, {
+      threadId,
+    });
+  }
+  if (auth.tenantId && thread.tenant_id !== auth.tenantId) {
+    throw new OpenTelError("TENANT_MISMATCH", "Token tenant does not match thread tenant", {
+      threadId,
+    });
+  }
+
+  const q = (req as { query?: { limit?: string; offset?: string } }).query;
+  const messages = await listChatMessages(db, threadId, {
+    limit: q?.limit ? Number(q.limit) : 100,
+    offset: q?.offset ? Number(q.offset) : 0,
+  });
+  return reply.send(
+    messages.map((m) => ({
+      id: m.id,
+      threadId: m.thread_id,
+      fromEndpointId: m.from_endpoint_id,
+      body: m.body,
+      metadata: m.metadata,
+      createdAt: m.created_at,
+    }))
+  );
 });
 
 if (process.env.NODE_ENV !== "test") {

@@ -24,7 +24,13 @@ export class OpenTelClient {
     this.ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
-        if (msg.type?.startsWith("call.") || msg.type?.startsWith("signaling.")) {
+        if (
+          msg.type?.startsWith("call.") ||
+          msg.type?.startsWith("signaling.") ||
+          msg.type === "message.received" ||
+          msg.type === "message.sent" ||
+          msg.type === "thread_joined"
+        ) {
           this.eventHandlers.forEach((cb) => cb(msg));
         }
       } catch {}
@@ -80,5 +86,17 @@ export class OpenTelClient {
 
   createPeerConnection(): RTCPeerConnection {
     return new RTCPeerConnection({ iceServers: this.iceServers });
+  }
+
+  // --- Chat ---
+
+  joinThread(threadId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error("Not connected");
+    this.ws.send(JSON.stringify({ type: "join_thread", threadId }));
+  }
+
+  sendMessage(threadId: string, body: string, metadata?: Record<string, string>): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error("Not connected");
+    this.ws.send(JSON.stringify({ type: "send_message", threadId, body, metadata: metadata ?? {} }));
   }
 }

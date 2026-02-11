@@ -301,6 +301,22 @@ importers:
         specifier: ^5.3.0
         version: 5.9.3
 
+  packages/secrets:
+    dependencies:
+      pg:
+        specifier: ^8.11.0
+        version: 8.18.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.10.0
+        version: 20.19.33
+      '@types/pg':
+        specifier: ^8.10.0
+        version: 8.16.0
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
+
   packages/server-sdk:
     dependencies:
       '@opentel/schemas':

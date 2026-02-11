@@ -12,13 +12,19 @@ async function migrate() {
   });
 
   if (flavor === "postgres") {
-    const { up } = await import("./migrations/001_initial.postgres.js");
-    await up(db);
+    const { up: up1 } = await import("./migrations/001_initial.postgres.js");
+    await up1(db);
     console.log("Ran 001_initial (postgres)");
+    const { up: up2 } = await import("./migrations/002_chat.postgres.js");
+    await up2(db);
+    console.log("Ran 002_chat (postgres)");
   } else {
-    const { up } = await import("./migrations/001_initial.mysql.js");
-    await up(db);
+    const { up: up1 } = await import("./migrations/001_initial.mysql.js");
+    await up1(db);
     console.log("Ran 001_initial (mysql)");
+    const { up: up2 } = await import("./migrations/002_chat.mysql.js");
+    await up2(db);
+    console.log("Ran 002_chat (mysql)");
   }
 
   await db.destroy();

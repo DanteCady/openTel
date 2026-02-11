@@ -8,7 +8,7 @@ import Fastify from "fastify";
 import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
 import { Counter, Gauge, register, collectDefaultMetrics } from "prom-client";
-import { connect as natsConnect, publishCallEvent, deliverWebhook } from "@opentel/events";
+import { connect as natsConnect, publishCallEvent, publishChatEvent, deliverWebhook } from "@opentel/events";
 import { verifyToken } from "@opentel/auth";
 import { transitionCallState } from "@opentel/core";
 import {
@@ -19,8 +19,10 @@ import {
   getCall,
   getTenant,
   setPresence,
+  getChatThread,
+  createChatMessage,
 } from "@opentel/storage";
-import { DialMessageSchema } from "@opentel/schemas";
+import { DialMessageSchema, JoinThreadMessageSchema, SendMessageSchema } from "@opentel/schemas";
 
 const dbUrl = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/opentel";
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
@@ -63,9 +65,54 @@ app.get("/metrics", async (_req, reply) => {
 });
 
 const sockets = new Map<string, { ws: WebSocket; tenantId: string }>();
+// threadId -> endpointId -> { ws, tenantId }
+const threadParticipants = new Map<string, Map<string, { ws: WebSocket; tenantId: string }>>();
+// endpointId -> Set<threadId> (for cleanup on disconnect)
+const endpointThreads = new Map<string, Set<string>>();
 
 function send(ws: WebSocket, msg: object) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+function addToThread(threadId: string, endpointId: string, tenantId: string, ws: WebSocket) {
+  let participants = threadParticipants.get(threadId);
+  if (!participants) {
+    participants = new Map();
+    threadParticipants.set(threadId, participants);
+  }
+  participants.set(endpointId, { ws, tenantId });
+  let threads = endpointThreads.get(endpointId);
+  if (!threads) {
+    threads = new Set();
+    endpointThreads.set(endpointId, threads);
+  }
+  threads.add(threadId);
+}
+
+function removeFromThread(threadId: string, endpointId: string) {
+  const participants = threadParticipants.get(threadId);
+  if (participants) {
+    participants.delete(endpointId);
+    if (participants.size === 0) threadParticipants.delete(threadId);
+  }
+  const threads = endpointThreads.get(endpointId);
+  if (threads) {
+    threads.delete(threadId);
+    if (threads.size === 0) endpointThreads.delete(endpointId);
+  }
+}
+
+function removeEndpointFromAllThreads(endpointId: string) {
+  const threads = endpointThreads.get(endpointId);
+  if (!threads) return;
+  for (const threadId of threads) {
+    const participants = threadParticipants.get(threadId);
+    if (participants) {
+      participants.delete(endpointId);
+      if (participants.size === 0) threadParticipants.delete(threadId);
+    }
+  }
+  endpointThreads.delete(endpointId);
 }
 
 function handleWsConnection(ws: WebSocket) {
@@ -215,6 +262,65 @@ function handleWsConnection(ws: WebSocket) {
         send(ws, { type: "call_ended", callId });
         return;
       }
+
+      if (msg.type === "join_thread") {
+        const parsed = JoinThreadMessageSchema.safeParse(msg);
+        if (!parsed.success) {
+          ws.send(JSON.stringify({ type: "error", message: "Invalid join_thread" }));
+          return;
+        }
+        const { threadId } = parsed.data;
+        const thread = await getChatThread(db, threadId);
+        if (!thread || thread.tenant_id !== tid) {
+          ws.send(JSON.stringify({ type: "error", message: "Thread not found" }));
+          return;
+        }
+        addToThread(threadId, eid, tid, ws);
+        ws.send(JSON.stringify({ type: "thread_joined", threadId }));
+        return;
+      }
+
+      if (msg.type === "send_message") {
+        const parsed = SendMessageSchema.safeParse(msg);
+        if (!parsed.success) {
+          ws.send(JSON.stringify({ type: "error", message: "Invalid send_message" }));
+          return;
+        }
+        const { threadId, body, metadata } = parsed.data;
+        const thread = await getChatThread(db, threadId);
+        if (!thread || thread.tenant_id !== tid) {
+          ws.send(JSON.stringify({ type: "error", message: "Thread not found" }));
+          return;
+        }
+        const message = await createChatMessage(db, threadId, body, {
+          fromEndpointId: eid,
+          metadata: metadata ?? undefined,
+        });
+        const ts = new Date().toISOString();
+        await publishChatEvent({
+          event: "chat.message.created",
+          messageId: message.id,
+          threadId,
+          fromEndpointId: eid,
+          body,
+          ts,
+        });
+        const participants = threadParticipants.get(threadId);
+        if (participants) {
+          for (const [pid, { ws: pWs }] of participants) {
+            send(pWs, {
+              type: "message.received",
+              messageId: message.id,
+              threadId,
+              fromEndpointId: eid,
+              body,
+              ts,
+            });
+          }
+        }
+        send(ws, { type: "message.sent", messageId: message.id, threadId, ts });
+        return;
+      }
     } catch (e) {
       ws.send(JSON.stringify({ type: "error", message: String(e) }));
     }
@@ -222,6 +328,7 @@ function handleWsConnection(ws: WebSocket) {
 
   ws.on("close", () => {
     if (endpointId) {
+      removeEndpointFromAllThreads(endpointId);
       sockets.delete(endpointId);
       wsConnectionsGauge.set(sockets.size);
       setPresence(endpointId, false);
