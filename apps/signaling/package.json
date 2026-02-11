@@ -10,18 +10,19 @@
     "lint": "eslint src/"
   },
   "dependencies": {
+    "@fastify/cors": "^9.0.0",
     "@opentel/auth": "workspace:*",
     "@opentel/core": "workspace:*",
     "@opentel/events": "workspace:*",
     "@opentel/schemas": "workspace:*",
     "@opentel/storage": "workspace:*",
-    "@fastify/cors": "^9.0.0",
-    "ws": "^8.18.0",
+    "@opentel/telemetry": "workspace:^",
     "dotenv": "^16.0.0",
     "fastify": "^4.25.0",
     "pino": "^8.17.0",
     "pino-pretty": "^10.3.0",
-    "prom-client": "^15.0.0"
+    "prom-client": "^15.0.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

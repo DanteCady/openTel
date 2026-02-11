@@ -3,6 +3,8 @@ import { config as dotenvConfig } from "dotenv";
 // Load root .env when running from apps/api (e.g. via turbo)
 dotenvConfig({ path: path.resolve(process.cwd(), "../../.env") });
 dotenvConfig(); // override with local .env if present
+import { initTracing } from "@opentel/telemetry";
+initTracing("opentel-api");
 import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cors from "@fastify/cors";

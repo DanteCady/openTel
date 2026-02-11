@@ -11,13 +11,14 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fastify/cors": "^8.0.0",
+    "@fastify/swagger": "^8.0.0",
+    "@fastify/swagger-ui": "^2.0.0",
     "@opentel/auth": "workspace:*",
     "@opentel/errors": "workspace:*",
     "@opentel/schemas": "workspace:*",
     "@opentel/storage": "workspace:*",
-    "@fastify/cors": "^8.0.0",
-    "@fastify/swagger": "^8.0.0",
-    "@fastify/swagger-ui": "^2.0.0",
+    "@opentel/telemetry": "workspace:^",
     "dotenv": "^16.0.0",
     "fastify": "^4.25.0",
     "pino": "^8.17.0",

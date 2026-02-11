@@ -2,6 +2,8 @@ import path from "node:path";
 import { config as dotenvConfig } from "dotenv";
 dotenvConfig({ path: path.resolve(process.cwd(), "../../.env") });
 dotenvConfig();
+import { initTracing } from "@opentel/telemetry";
+initTracing("opentel-signaling");
 import Fastify from "fastify";
 import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
