@@ -54,11 +54,22 @@ export type UpdateTenantInput = z.infer<typeof UpdateTenantInputSchema>;
 // --- WS Messages ---
 export const AuthMessageSchema = z.object({ type: z.literal("auth"), token: z.string() });
 export const RegisterMessageSchema = z.object({ type: z.literal("register"), endpointId: z.string().uuid() });
-export const DialMessageSchema = z.object({
-  type: z.literal("dial"),
-  toEndpointId: z.string().uuid(),
-  metadata: z.record(z.string()).optional(),
-});
+const E164_REGEX = /^\+[1-9]\d{1,14}$/;
+export function isE164(value: string): boolean {
+  return E164_REGEX.test(value.trim());
+}
+
+export const DialMessageSchema = z
+  .object({
+    type: z.literal("dial"),
+    toEndpointId: z.string().uuid().optional(),
+    toPhoneNumber: z.string().optional(),
+    metadata: z.record(z.string()).optional(),
+  })
+  .refine((data) => (data.toEndpointId != null) !== (data.toPhoneNumber != null && data.toPhoneNumber.trim() !== ""), {
+    message: "Provide exactly one of toEndpointId (UUID) or toPhoneNumber (E.164)",
+    path: [],
+  });
 export const AnswerMessageSchema = z.object({
   type: z.literal("answer"),
   callId: z.string().uuid(),

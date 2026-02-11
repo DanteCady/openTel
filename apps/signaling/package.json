@@ -14,6 +14,7 @@
     "@opentel/auth": "workspace:*",
     "@opentel/core": "workspace:*",
     "@opentel/events": "workspace:*",
+    "@opentel/gateway-client": "workspace:*",
     "@opentel/schemas": "workspace:*",
     "@opentel/storage": "workspace:*",
     "@opentel/telemetry": "workspace:^",

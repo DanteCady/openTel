@@ -21,8 +21,10 @@ export interface Endpoint {
 export interface Call {
   id: string;
   tenant_id: string;
-  from_endpoint_id: string;
-  to_endpoint_id: string;
+  from_endpoint_id: string | null;
+  to_endpoint_id: string | null;
+  from_phone_number: string | null;
+  to_phone_number: string | null;
   state: string;
   metadata: Record<string, string> | null;
   created_at: Date;
@@ -44,9 +46,10 @@ export interface EndpointRepository {
 export interface CallRepository {
   create(
     tenantId: string,
-    fromEndpointId: string,
-    toEndpointId: string,
-    metadata?: Record<string, string> | null
+    fromEndpointId: string | null,
+    toEndpointId: string | null,
+    metadata?: Record<string, string> | null,
+    opts?: { toPhoneNumber?: string | null; fromPhoneNumber?: string | null }
   ): Promise<{ id: string; state: string }>;
   get(id: string): Promise<Call | null>;
   updateState(id: string, state: string, answeredAt?: Date | null): Promise<void>;

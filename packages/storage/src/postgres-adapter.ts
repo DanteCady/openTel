@@ -66,8 +66,8 @@ function createEndpointRepo(db: Kysely<Database>): EndpointRepository {
 
 function createCallRepo(db: Kysely<Database>): CallRepository {
   return {
-    async create(tenantId, fromEndpointId, toEndpointId, metadata) {
-      return createCall(db, tenantId, fromEndpointId, toEndpointId, metadata);
+    async create(tenantId, fromEndpointId, toEndpointId, metadata, opts) {
+      return createCall(db, tenantId, fromEndpointId, toEndpointId, metadata, opts);
     },
     async get(id) {
       const row = await getCall(db, id);

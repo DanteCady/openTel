@@ -22,7 +22,13 @@ import {
   getChatThread,
   createChatMessage,
 } from "@opentel/storage";
-import { DialMessageSchema, JoinThreadMessageSchema, SendMessageSchema } from "@opentel/schemas";
+import { DialMessageSchema, isE164, JoinThreadMessageSchema, SendMessageSchema } from "@opentel/schemas";
+import {
+  isPhase2Enabled,
+  originateToPstn,
+  registerInboundHandler,
+  notifyInboundCall,
+} from "@opentel/gateway-client";
 
 const dbUrl = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/opentel";
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
@@ -62,6 +68,75 @@ app.get("/health", async (_req, reply) => {
 app.get("/metrics", async (_req, reply) => {
   reply.header("Content-Type", register.contentType);
   return reply.send(await register.metrics());
+});
+
+const inboundTenantId = process.env.OPENTEL_INBOUND_TENANT_ID?.trim();
+const inboundDefaultEndpointId = process.env.OPENTEL_INBOUND_DEFAULT_ENDPOINT_ID?.trim();
+if (isPhase2Enabled() && inboundTenantId && inboundDefaultEndpointId) {
+  registerInboundHandler(async (info) => {
+    const metadata: Record<string, string> = {};
+    if (info.channelUuid) metadata.gatewayChannelUuid = info.channelUuid;
+    const call = await createCall(db, inboundTenantId, null, inboundDefaultEndpointId, metadata, {
+      fromPhoneNumber: info.callerId,
+    });
+    callsCreatedCounter.inc();
+    await updateCallState(db, call.id, "RINGING");
+    const ts = new Date().toISOString();
+    await publishCallEvent({
+      event: "call.created",
+      callId: call.id,
+      tenantId: inboundTenantId,
+      fromEndpointId: null,
+      toEndpointId: inboundDefaultEndpointId,
+      metadata,
+      ts,
+    });
+    await publishCallEvent({ event: "call.ringing", callId: call.id, ts });
+    const callee = sockets.get(inboundDefaultEndpointId);
+    if (callee) {
+      send(callee.ws, {
+        type: "incoming_call",
+        callId: call.id,
+        fromEndpointId: null,
+        fromPhoneNumber: info.callerId,
+        metadata,
+        ts,
+      });
+    }
+    const tenant = await getTenant(db, inboundTenantId);
+    if (tenant?.webhook_url) {
+      deliverWebhook(tenant.webhook_url, "call.created", {
+        callId: call.id,
+        tenantId: inboundTenantId,
+        fromPhoneNumber: info.callerId,
+        toEndpointId: inboundDefaultEndpointId,
+        metadata,
+      });
+      deliverWebhook(tenant.webhook_url, "call.ringing", { callId: call.id });
+    }
+    return { endpointIds: [inboundDefaultEndpointId] };
+  });
+}
+
+app.post("/inbound-call", async (req, reply) => {
+  try {
+    const body = (req as { body?: { callerId?: string; dialedNumber?: string; channelUuid?: string; routingHint?: string } }).body;
+    const callerId = body?.callerId ?? body?.dialedNumber ?? "";
+    const dialedNumber = body?.dialedNumber ?? "";
+    if (!callerId && !dialedNumber) {
+      return reply.status(400).send({ error: "callerId or dialedNumber required" });
+    }
+    const result = await notifyInboundCall({
+      callerId: String(callerId),
+      dialedNumber: String(dialedNumber),
+      channelUuid: body?.channelUuid,
+      routingHint: body?.routingHint,
+    });
+    return reply.send(result);
+  } catch (err) {
+    app.log.warn({ err }, "Inbound call failed");
+    return reply.status(500).send({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 const sockets = new Map<string, { ws: WebSocket; tenantId: string }>();
@@ -162,16 +237,47 @@ function handleWsConnection(ws: WebSocket) {
           ws.send(JSON.stringify({ type: "error", message: "Invalid dial" }));
           return;
         }
-        const { toEndpointId, metadata } = parsed.data;
-        const call = await createCall(db, tid, eid, toEndpointId, metadata);
+        const { toEndpointId, toPhoneNumber, metadata } = parsed.data;
+        const isPstn = toPhoneNumber != null && toPhoneNumber.trim() !== "" && isE164(toPhoneNumber.trim());
+
+        if (isPstn) {
+          const phone = toPhoneNumber!.trim();
+          if (!isPhase2Enabled()) {
+            ws.send(JSON.stringify({ type: "error", message: "PSTN not configured: set OPENTEL_GATEWAY_URL" }));
+            return;
+          }
+          const call = await createCall(db, tid, eid, null, metadata, { toPhoneNumber: phone });
+          callsCreatedCounter.inc();
+          try {
+            await originateToPstn(phone);
+            await updateCallState(db, call.id, "RINGING");
+            const ts = new Date().toISOString();
+            await publishCallEvent({ event: "call.created", callId: call.id, tenantId: tid, fromEndpointId: eid, toEndpointId: null, metadata, ts });
+            await publishCallEvent({ event: "call.ringing", callId: call.id, ts });
+            send(ws, { type: "call_created", callId: call.id, state: "RINGING" });
+            const tenant = await getTenant(db, tid);
+            if (tenant?.webhook_url) {
+              deliverWebhook(tenant.webhook_url, "call.created", { callId: call.id, tenantId: tid, fromEndpointId: eid, toPhoneNumber: phone, metadata });
+              deliverWebhook(tenant.webhook_url, "call.ringing", { callId: call.id });
+            }
+          } catch (err) {
+            await updateCallState(db, call.id, "ENDED");
+            const msgErr = err instanceof Error ? err.message : String(err);
+            ws.send(JSON.stringify({ type: "error", message: `PSTN originate failed: ${msgErr}` }));
+          }
+          return;
+        }
+
+        const toId = toEndpointId!;
+        const call = await createCall(db, tid, eid, toId, metadata);
         callsCreatedCounter.inc();
         await updateCallState(db, call.id, "RINGING");
 
         const ts = new Date().toISOString();
-        await publishCallEvent({ event: "call.created", callId: call.id, tenantId: tid, fromEndpointId: eid, toEndpointId, metadata, ts });
+        await publishCallEvent({ event: "call.created", callId: call.id, tenantId: tid, fromEndpointId: eid, toEndpointId: toId, metadata, ts });
         await publishCallEvent({ event: "call.ringing", callId: call.id, ts });
 
-        const callee = sockets.get(toEndpointId);
+        const callee = sockets.get(toId);
         if (callee) {
           send(callee.ws, { type: "incoming_call", callId: call.id, fromEndpointId: eid, metadata, ts });
         }
@@ -179,7 +285,7 @@ function handleWsConnection(ws: WebSocket) {
 
         const tenant = await getTenant(db, tid);
         if (tenant?.webhook_url) {
-          deliverWebhook(tenant.webhook_url, "call.created", { callId: call.id, tenantId: tid, fromEndpointId: eid, toEndpointId, metadata });
+          deliverWebhook(tenant.webhook_url, "call.created", { callId: call.id, tenantId: tid, fromEndpointId: eid, toEndpointId: toId, metadata });
           deliverWebhook(tenant.webhook_url, "call.ringing", { callId: call.id });
         }
         return;
@@ -204,7 +310,7 @@ function handleWsConnection(ws: WebSocket) {
         await publishCallEvent({ event: "call.answered", callId, ts });
         await publishCallEvent({ event: "signaling.answer", callId, sdp, ts });
 
-        const caller = sockets.get(call.from_endpoint_id);
+        const caller = call.from_endpoint_id ? sockets.get(call.from_endpoint_id) : undefined;
         if (caller) send(caller.ws, { type: "answer", callId, sdp, ts });
 
         const tenant = await getTenant(db, tid);
@@ -219,7 +325,7 @@ function handleWsConnection(ws: WebSocket) {
         const sdp = msg.sdp;
         const call = await getCall(db, callId);
         if (!call || call.tenant_id !== tid) return;
-        const callee = sockets.get(call.to_endpoint_id);
+        const callee = call.to_endpoint_id ? sockets.get(call.to_endpoint_id) : undefined;
         if (callee) send(callee.ws, { type: "offer", callId, sdp, ts: new Date().toISOString() });
         await publishCallEvent({ event: "signaling.offer", callId, sdp, ts: new Date().toISOString() });
         return;
@@ -231,7 +337,7 @@ function handleWsConnection(ws: WebSocket) {
         const call = await getCall(db, callId);
         if (!call || call.tenant_id !== tid) return;
         const otherId = call.from_endpoint_id === eid ? call.to_endpoint_id : call.from_endpoint_id;
-        const other = sockets.get(otherId);
+        const other = otherId != null ? sockets.get(otherId) : undefined;
         if (other) send(other.ws, { type: "ice", callId, candidate, ts: new Date().toISOString() });
         await publishCallEvent({ event: "signaling.ice", callId, candidate, ts: new Date().toISOString() });
         return;
@@ -253,7 +359,7 @@ function handleWsConnection(ws: WebSocket) {
         await publishCallEvent({ event: "call.ended", callId, reason: "hangup", duration, metadata: call.metadata ?? undefined, ts });
 
         const otherId = call.from_endpoint_id === endpointId ? call.to_endpoint_id : call.from_endpoint_id;
-        const other = sockets.get(otherId);
+        const other = otherId != null ? sockets.get(otherId) : undefined;
         if (other) send(other.ws, { type: "hangup", callId, reason: "hangup", ts });
 
         const tenant = await getTenant(db, tid);

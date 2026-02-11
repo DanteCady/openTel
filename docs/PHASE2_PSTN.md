@@ -64,8 +64,20 @@ Planned env and wizard options (details may change as we implement):
 | `OPENTEL_SIP_TRUNK_HOST` | SIP trunk or SBC host (optional if gateway is preconfigured). |
 | `OPENTEL_SIP_TRUNK_PORT` | SIP port (e.g. 5060). |
 | `OPENTEL_SIP_TRUNK_USER` / `OPENTEL_SIP_TRUNK_PASSWORD` | Trunk auth (if required). |
+| `OPENTEL_INBOUND_TENANT_ID` | Tenant ID for inbound PSTN calls (used when gateway POSTs to `/inbound-call`). |
+| `OPENTEL_INBOUND_DEFAULT_ENDPOINT_ID` | Endpoint ID to ring for inbound calls (MVP: single endpoint). |
 
 The **config wizard** Step 6 (SIP/SBC) collects these so they can be written to `.env` or your config store. The gateway itself is run and configured by you (Docker, VM, or existing PBX).
+
+### Inbound HTTP callback
+
+When the gateway receives an inbound INVITE, it (or an adapter) should POST to the signaling server:
+
+- **URL:** `POST http://<signaling-host>:<port>/inbound-call`
+- **Body:** `{ "callerId": "+15551234567", "dialedNumber": "+15559876543", "channelUuid": "<gateway-channel-uuid>", "routingHint": "optional" }`
+- **Response:** `200 OK` with `{ "endpointIds": ["<uuid>"] }` (the endpoint(s) that will be rung).
+
+OpenTel creates a call, sends `incoming_call` to the specified endpoint over WebSocket, and delivers webhooks. When the agent answers, the gateway must bridge the SIP leg to the agent’s WebRTC leg (gateway-specific configuration or API).
 
 ---
 
