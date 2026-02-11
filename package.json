@@ -19,7 +19,8 @@
     "autoconfigure": "./scripts/autoconfigure.sh",
     "skip-wizard": "pnpm autoconfigure",
     "dev:free": "./scripts/free-ports.sh",
-    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
+    "dev:ccaas": "pnpm --filter @opentel/ccaas dev"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

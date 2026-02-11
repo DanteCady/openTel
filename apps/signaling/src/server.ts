@@ -21,6 +21,12 @@ import {
   setPresence,
   getChatThread,
   createChatMessage,
+  getQueue,
+  listQueueMembers,
+  getAgentState,
+  getPresence,
+  setAgentState,
+  updateEndpointAgentState,
 } from "@opentel/storage";
 import { DialMessageSchema, isE164, JoinThreadMessageSchema, SendMessageSchema } from "@opentel/schemas";
 import {
@@ -237,8 +243,48 @@ function handleWsConnection(ws: WebSocket) {
           ws.send(JSON.stringify({ type: "error", message: "Invalid dial" }));
           return;
         }
-        const { toEndpointId, toPhoneNumber, metadata } = parsed.data;
+        const { toEndpointId, toQueueId, toPhoneNumber, metadata } = parsed.data;
         const isPstn = toPhoneNumber != null && toPhoneNumber.trim() !== "" && isE164(toPhoneNumber.trim());
+
+        if (toQueueId) {
+          const queue = await getQueue(db, toQueueId);
+          if (!queue || queue.tenant_id !== tid) {
+            ws.send(JSON.stringify({ type: "error", message: "Queue not found" }));
+            return;
+          }
+          const members = await listQueueMembers(db, toQueueId);
+          const available: string[] = [];
+          for (const m of members) {
+            const online = await getPresence(m.endpoint_id);
+            const state = (await getAgentState(m.endpoint_id)) ?? "available";
+            if (online && state === "available") available.push(m.endpoint_id);
+          }
+          if (available.length === 0) {
+            ws.send(JSON.stringify({ type: "error", message: "No available agents in queue" }));
+            return;
+          }
+          const toId = queue.routing_strategy === "longest-idle" ? available[0] : available[0];
+          const call = await createCall(db, tid, eid, toId, metadata, { queueId: toQueueId, direction: "outbound" });
+          callsCreatedCounter.inc();
+          await updateCallState(db, call.id, "RINGING");
+
+          const ts = new Date().toISOString();
+          await publishCallEvent({ event: "call.created", callId: call.id, tenantId: tid, fromEndpointId: eid, toEndpointId: toId, metadata, ts });
+          await publishCallEvent({ event: "call.ringing", callId: call.id, ts });
+
+          const callee = sockets.get(toId);
+          if (callee) {
+            send(callee.ws, { type: "incoming_call", callId: call.id, fromEndpointId: eid, metadata, ts });
+          }
+          send(ws, { type: "call_created", callId: call.id, state: "RINGING" });
+
+          const tenant = await getTenant(db, tid);
+          if (tenant?.webhook_url) {
+            deliverWebhook(tenant.webhook_url, "call.created", { callId: call.id, tenantId: tid, fromEndpointId: eid, toEndpointId: toId, queueId: toQueueId, metadata });
+            deliverWebhook(tenant.webhook_url, "call.ringing", { callId: call.id });
+          }
+          return;
+        }
 
         if (isPstn) {
           const phone = toPhoneNumber!.trim();
@@ -305,6 +351,8 @@ function handleWsConnection(ws: WebSocket) {
           return;
         }
         await updateCallState(db, callId, next, new Date());
+        await setAgentState(eid, "busy");
+        await updateEndpointAgentState(db, eid, "busy");
 
         const ts = new Date().toISOString();
         await publishCallEvent({ event: "call.answered", callId, ts });
@@ -351,6 +399,11 @@ function handleWsConnection(ws: WebSocket) {
         if (!next) return;
         callsEndedCounter.inc();
         await updateCallState(db, callId, next);
+        const agentId = call.to_endpoint_id;
+        if (agentId) {
+          await setAgentState(agentId, "available");
+          await updateEndpointAgentState(db, agentId, "available");
+        }
 
         const duration = call.answered_at
           ? Math.floor((Date.now() - new Date(call.answered_at).getTime()) / 1000)

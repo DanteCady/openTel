@@ -111,6 +111,14 @@ export async function createEndpoint(
   };
 }
 
+export async function getEndpoint(db: Kysely<Database>, endpointId: string) {
+  return db
+    .selectFrom("endpoints")
+    .select(["id", "tenant_id", "label", "type", "agent_state", "created_at"])
+    .where("id", "=", endpointId)
+    .executeTakeFirst();
+}
+
 export async function listEndpoints(
   db: Kysely<Database>,
   tenantId: string,
@@ -119,7 +127,7 @@ export async function listEndpoints(
 ) {
   return db
     .selectFrom("endpoints")
-    .select(["id", "tenant_id", "label", "type", "created_at"])
+    .select(["id", "tenant_id", "label", "type", "agent_state", "created_at"])
     .where("tenant_id", "=", tenantId)
     .limit(limit)
     .offset(offset)
@@ -170,6 +178,18 @@ export async function updateCallState(
   const set: Record<string, unknown> = { state, updated_at: new Date() };
   if (answeredAt !== undefined) set.answered_at = answeredAt;
   await db.updateTable("calls").set(set).where("id", "=", callId).execute();
+}
+
+export async function updateCallToEndpoint(
+  db: Kysely<Database>,
+  callId: string,
+  toEndpointId: string
+): Promise<void> {
+  await db
+    .updateTable("calls")
+    .set({ to_endpoint_id: toEndpointId, updated_at: new Date() })
+    .where("id", "=", callId)
+    .execute();
 }
 
 export async function getCall(db: Kysely<Database>, callId: string) {

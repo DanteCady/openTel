@@ -10,10 +10,11 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
-import { getDb } from "@opentel/storage";
 import { mintToken, verifyToken } from "@opentel/auth";
 import { OpenTelError, toHttpStatus } from "@opentel/errors";
 import {
+  getDb,
+  getRedis,
   createTenant,
   createEndpoint,
   updateTenantWebhook,
@@ -32,6 +33,15 @@ import {
   getEmailThread,
   createEmailMessage,
   createSmsMessage,
+  createQueue,
+  getQueue,
+  listQueues,
+  addQueueMember,
+  removeQueueMember,
+  listQueueMembers,
+  getEndpoint,
+  updateEndpointAgentState,
+  setAgentState,
 } from "@opentel/storage";
 import { createSecretsProvider } from "@opentel/secrets";
 import { sendViaSendGrid, sendViaMailgun } from "./email-send.js";
@@ -41,14 +51,19 @@ import {
   CreateEndpointInputSchema,
   MintTokenInputSchema,
   UpdateTenantInputSchema,
+  CreateQueueInputSchema,
+  AddQueueMemberInputSchema,
+  UpdateEndpointStateInputSchema,
 } from "@opentel/schemas";
 import { register, collectDefaultMetrics } from "prom-client";
 
 const dbUrl = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/opentel";
+const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const jwtSecret = process.env.JWT_SECRET || "dev-secret";
 const port = Number(process.env.API_PORT) || 3000;
 
 const db = getDb(dbUrl);
+getRedis(redisUrl);
 
 collectDefaultMetrics();
 
@@ -211,6 +226,171 @@ app.post("/v1/tenants/:tenantId/endpoints", async (req, reply) => {
 
   const endpoint = await createEndpoint(db, tenantId, parsed.data.label.trim());
   return reply.send(endpoint);
+});
+
+app.patch("/v1/tenants/:tenantId/endpoints/:endpointId/state", async (req, reply) => {
+  const auth = requireAuth(req);
+  const { tenantId, endpointId } = (req as { params: { tenantId: string; endpointId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+  validateUuid(endpointId, "endpointId");
+
+  const parsed = UpdateEndpointStateInputSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const fields = parsed.error.issues.map((i) => ({ path: i.path, message: i.message }));
+    throw new OpenTelError("VALIDATION_ERROR", "Request validation failed", { fields });
+  }
+
+  if (auth.tenantId && auth.tenantId !== tenantId) {
+    throw new OpenTelError("TENANT_MISMATCH", "Token tenant does not match", { tenantId });
+  }
+
+  const endpoint = await getEndpoint(db, endpointId);
+  if (!endpoint || endpoint.tenant_id !== tenantId) {
+    throw new OpenTelError("ENDPOINT_NOT_FOUND", `Endpoint ${endpointId} not found`, { endpointId });
+  }
+
+  await updateEndpointAgentState(db, endpointId, parsed.data.agentState);
+  await setAgentState(endpointId, parsed.data.agentState);
+  return reply.send({ endpointId, agentState: parsed.data.agentState });
+});
+
+// --- Queues ---
+
+app.post("/v1/tenants/:tenantId/queues", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId } = (req as { params: { tenantId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+
+  const parsed = CreateQueueInputSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const fields = parsed.error.issues.map((i) => ({ path: i.path, message: i.message }));
+    throw new OpenTelError("VALIDATION_ERROR", "Request validation failed", { fields });
+  }
+
+  const queue = await createQueue(db, tenantId, parsed.data.name, {
+    routingStrategy: parsed.data.routingStrategy,
+    maxWaitSec: parsed.data.maxWaitSec ?? null,
+    overflowQueueId: parsed.data.overflowQueueId ?? null,
+  });
+  return reply.send({
+    id: queue.id,
+    tenantId: queue.tenant_id,
+    name: queue.name,
+    routingStrategy: queue.routing_strategy,
+    maxWaitSec: queue.max_wait_sec,
+    overflowQueueId: queue.overflow_queue_id,
+    createdAt: queue.created_at,
+  });
+});
+
+app.get("/v1/tenants/:tenantId/queues", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId } = (req as { params: { tenantId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+
+  const q = (req as { query?: { limit?: string; offset?: string } }).query;
+  const queues = await listQueues(db, tenantId, {
+    limit: q?.limit ? Number(q.limit) : 50,
+    offset: q?.offset ? Number(q.offset) : 0,
+  });
+  return reply.send(
+    queues.map((r) => ({
+      id: r.id,
+      tenantId: r.tenant_id,
+      name: r.name,
+      routingStrategy: r.routing_strategy,
+      maxWaitSec: r.max_wait_sec,
+      overflowQueueId: r.overflow_queue_id,
+      createdAt: r.created_at,
+    }))
+  );
+});
+
+app.get("/v1/tenants/:tenantId/queues/:queueId", async (req, reply) => {
+  const auth = requireAuth(req);
+  const { tenantId, queueId } = (req as { params: { tenantId: string; queueId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+  validateUuid(queueId, "queueId");
+
+  const queue = await getQueue(db, queueId);
+  if (!queue || queue.tenant_id !== tenantId) {
+    throw new OpenTelError("QUEUE_NOT_FOUND", `Queue ${queueId} not found`, { queueId });
+  }
+  if (auth.tenantId && auth.tenantId !== tenantId) {
+    throw new OpenTelError("TENANT_MISMATCH", "Token tenant does not match", { tenantId });
+  }
+
+  const members = await listQueueMembers(db, queueId);
+  return reply.send({
+    id: queue.id,
+    tenantId: queue.tenant_id,
+    name: queue.name,
+    routingStrategy: queue.routing_strategy,
+    maxWaitSec: queue.max_wait_sec,
+    overflowQueueId: queue.overflow_queue_id,
+    createdAt: queue.created_at,
+    members: members.map((m) => ({
+      id: m.id,
+      endpointId: m.endpoint_id,
+      priority: m.priority,
+      skills: m.skills,
+    })),
+  });
+});
+
+app.post("/v1/tenants/:tenantId/queues/:queueId/members", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId, queueId } = (req as { params: { tenantId: string; queueId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+  validateUuid(queueId, "queueId");
+
+  const parsed = AddQueueMemberInputSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const fields = parsed.error.issues.map((i) => ({ path: i.path, message: i.message }));
+    throw new OpenTelError("VALIDATION_ERROR", "Request validation failed", { fields });
+  }
+
+  const queue = await getQueue(db, queueId);
+  if (!queue || queue.tenant_id !== tenantId) {
+    throw new OpenTelError("QUEUE_NOT_FOUND", `Queue ${queueId} not found`, { queueId });
+  }
+
+  const endpoint = await getEndpoint(db, parsed.data.endpointId);
+  if (!endpoint || endpoint.tenant_id !== tenantId) {
+    throw new OpenTelError("ENDPOINT_NOT_FOUND", `Endpoint ${parsed.data.endpointId} not in tenant`, {
+      endpointId: parsed.data.endpointId,
+    });
+  }
+
+  const member = await addQueueMember(db, queueId, parsed.data.endpointId, {
+    priority: parsed.data.priority,
+    skills: parsed.data.skills ?? null,
+  });
+  return reply.send({
+    id: member.id,
+    queueId: member.queue_id,
+    endpointId: member.endpoint_id,
+    priority: member.priority,
+    skills: member.skills,
+  });
+});
+
+app.delete("/v1/tenants/:tenantId/queues/:queueId/members/:endpointId", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId, queueId, endpointId } = (req as {
+    params: { tenantId: string; queueId: string; endpointId: string };
+  }).params;
+  validateUuid(tenantId, "tenantId");
+  validateUuid(queueId, "queueId");
+  validateUuid(endpointId, "endpointId");
+
+  const queue = await getQueue(db, queueId);
+  if (!queue || queue.tenant_id !== tenantId) {
+    throw new OpenTelError("QUEUE_NOT_FOUND", `Queue ${queueId} not found`, { queueId });
+  }
+
+  await removeQueueMember(db, queueId, endpointId);
+  return reply.status(204).send();
 });
 
 app.post("/v1/tokens", async (req, reply) => {

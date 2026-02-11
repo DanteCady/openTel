@@ -22,8 +22,9 @@ No overlap between Docker and OpenTel apps. Use this when troubleshooting **EADD
 | Signaling      | **3001** | `SIGNALING_PORT` |
 | Config wizard  | **3003** | next dev -p 3003 |
 | Dev demo       | **3004** | next dev -p 3004 |
+| CCaaS          | **3005** | next dev -p 3005 |
 
-Docker does **not** use 3000, 3001, 3003, or 3004. Conflicts are from leftover Node/Next processes.
+Docker does **not** use 3000, 3001, 3003, 3004, or 3005. Conflicts are from leftover Node/Next processes.
 
 ## If you get NATS CONNECTION_REFUSED (port 4222)
 
@@ -42,7 +43,7 @@ Docker must be running so NATS is up. Start infra: `docker-compose -f infra/dock
    Or manually (macOS/Linux):
 
    ```bash
-   for p in 3000 3001 3003 3004; do lsof -ti:$p | xargs -r kill -9 2>/dev/null; done
+   for p in 3000 3001 3003 3004 3005; do lsof -ti:$p | xargs -r kill -9 2>/dev/null; done
    ```
 
-   On macOS, use: `lsof -ti:3000,3001,3003,3004 | xargs kill -9` (omit `-r`).
+   On macOS, use: `lsof -ti:3000,3001,3003,3004,3005 | xargs kill -9` (omit `-r`).

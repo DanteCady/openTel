@@ -28,3 +28,18 @@ export async function getPresence(endpointId: string): Promise<boolean> {
   const v = await r.get(`${PRESENCE_PREFIX}${endpointId}`);
   return v === "1";
 }
+
+const AGENT_STATE_PREFIX = "opentel:agent_state:";
+const AGENT_STATE_TTL = 86400; // 24h
+
+export async function setAgentState(endpointId: string, state: string): Promise<void> {
+  const r = redis;
+  if (!r) return;
+  await r.set(`${AGENT_STATE_PREFIX}${endpointId}`, state, "EX", AGENT_STATE_TTL);
+}
+
+export async function getAgentState(endpointId: string): Promise<string | null> {
+  const r = redis;
+  if (!r) return null;
+  return r.get(`${AGENT_STATE_PREFIX}${endpointId}`);
+}

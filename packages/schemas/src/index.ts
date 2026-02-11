@@ -51,6 +51,29 @@ export type MintTokenInput = z.infer<typeof MintTokenInputSchema>;
 export const UpdateTenantInputSchema = z.object({ webhookUrl: z.string().url().optional().nullable() });
 export type UpdateTenantInput = z.infer<typeof UpdateTenantInputSchema>;
 
+export const AgentStateSchema = z.enum(["available", "busy", "away", "break"]);
+export type AgentState = z.infer<typeof AgentStateSchema>;
+
+export const CreateQueueInputSchema = z.object({
+  name: z.string().min(1),
+  routingStrategy: z.enum(["round-robin", "longest-idle"]).optional(),
+  maxWaitSec: z.number().int().min(0).optional(),
+  overflowQueueId: z.string().uuid().optional().nullable(),
+});
+export type CreateQueueInput = z.infer<typeof CreateQueueInputSchema>;
+
+export const AddQueueMemberInputSchema = z.object({
+  endpointId: z.string().uuid(),
+  priority: z.number().int().min(0).optional(),
+  skills: z.record(z.unknown()).optional(),
+});
+export type AddQueueMemberInput = z.infer<typeof AddQueueMemberInputSchema>;
+
+export const UpdateEndpointStateInputSchema = z.object({
+  agentState: AgentStateSchema,
+});
+export type UpdateEndpointStateInput = z.infer<typeof UpdateEndpointStateInputSchema>;
+
 // --- WS Messages ---
 export const AuthMessageSchema = z.object({ type: z.literal("auth"), token: z.string() });
 export const RegisterMessageSchema = z.object({ type: z.literal("register"), endpointId: z.string().uuid() });
@@ -63,13 +86,19 @@ export const DialMessageSchema = z
   .object({
     type: z.literal("dial"),
     toEndpointId: z.string().uuid().optional(),
+    toQueueId: z.string().uuid().optional(),
     toPhoneNumber: z.string().optional(),
     metadata: z.record(z.string()).optional(),
   })
-  .refine((data) => (data.toEndpointId != null) !== (data.toPhoneNumber != null && data.toPhoneNumber.trim() !== ""), {
-    message: "Provide exactly one of toEndpointId (UUID) or toPhoneNumber (E.164)",
-    path: [],
-  });
+  .refine(
+    (data) => {
+      const hasEndpoint = data.toEndpointId != null;
+      const hasQueue = data.toQueueId != null;
+      const hasPhone = data.toPhoneNumber != null && data.toPhoneNumber.trim() !== "";
+      return [hasEndpoint, hasQueue, hasPhone].filter(Boolean).length === 1;
+    },
+    { message: "Provide exactly one of toEndpointId, toQueueId, or toPhoneNumber (E.164)", path: [] }
+  );
 export const AnswerMessageSchema = z.object({
   type: z.literal("answer"),
   callId: z.string().uuid(),
