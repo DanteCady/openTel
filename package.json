@@ -9,15 +9,16 @@
   "scripts": {
     "i": "pnpm install",
     "opentel": "pnpm --filter @opentel/demo-cli exec tsx src/cli.ts",
-    "dev": "turbo run dev --parallel --filter=./apps/api --filter=./apps/signaling",
-    "dev:all": "turbo run dev --parallel",
+    "dev": "./scripts/dev-full.sh",
     "dev:wizard": "pnpm --filter @opentel/config-wizard dev",
+    "dev:demo": "pnpm --filter @opentel/dev-demo dev",
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
     "db:migrate": "pnpm --filter @opentel/storage exec tsx src/migrate.ts",
     "autoconfigure": "./scripts/autoconfigure.sh",
     "skip-wizard": "pnpm autoconfigure",
+    "dev:free": "./scripts/free-ports.sh",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
   },
   "devDependencies": {

@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-import "dotenv/config";
+import path from "node:path";
+import { config as dotenvConfig } from "dotenv";
+// Load root .env so JWT_SECRET matches API (when run via pnpm from repo root, cwd is often apps/demo-cli)
+dotenvConfig({ path: path.resolve(process.cwd(), "../../.env") });
+dotenvConfig(); // local .env override
 import { program } from "commander";
 import { mintToken } from "@opentel/auth";
 
@@ -82,6 +86,29 @@ OpenTel First Call
 6. Mint tokens: opentel mint-token <tenantId> <aliceEndpointId> && opentel mint-token <tenantId> <bobEndpointId>
 7. Open infra/dev.html in two tabs, use the tokens, register endpoint, dial
 `);
+  });
+
+program
+  .command("demo-setup")
+  .description("Create tenant Acme, endpoints Alice & Bob, mint tokens; print copy-paste for two tabs")
+  .action(async () => {
+    const admin = mintToken(JWT_SECRET, { tenantId: "bootstrap", scopes: ["admin"] });
+    const tenant = await api("POST", "/v1/tenants", { name: "Acme" }, admin);
+    const tenantId = tenant.id;
+    const alice = await api("POST", `/v1/tenants/${tenantId}/endpoints`, { label: "Alice" }, admin);
+    const bob = await api("POST", `/v1/tenants/${tenantId}/endpoints`, { label: "Bob" }, admin);
+    const aliceTokenRes = await api("POST", "/v1/tokens", { tenantId, endpointId: alice.id }, admin);
+    const bobTokenRes = await api("POST", "/v1/tokens", { tenantId, endpointId: bob.id }, admin);
+
+    console.log("\n--- Tab 1 (Alice) ---");
+    console.log("Endpoint ID:", alice.id);
+    console.log("Token:", aliceTokenRes.token);
+    console.log("\n--- Tab 2 (Bob) ---");
+    console.log("Endpoint ID:", bob.id);
+    console.log("Token:", bobTokenRes.token);
+    console.log("\n--- Dial from Alice ---");
+    console.log("Other endpoint ID (to dial):", bob.id);
+    console.log("");
   });
 
 program.parse();

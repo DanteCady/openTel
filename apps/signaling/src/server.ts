@@ -1,6 +1,10 @@
-import "dotenv/config";
+import path from "node:path";
+import { config as dotenvConfig } from "dotenv";
+dotenvConfig({ path: path.resolve(process.cwd(), "../../.env") });
+dotenvConfig();
 import Fastify from "fastify";
-import websocket from "@fastify/websocket";
+import { WebSocketServer } from "ws";
+import type { WebSocket } from "ws";
 import { Counter, Gauge, register, collectDefaultMetrics } from "prom-client";
 import { connect as natsConnect, publishCallEvent, deliverWebhook } from "@opentel/events";
 import { verifyToken } from "@opentel/auth";
@@ -18,7 +22,11 @@ import { DialMessageSchema } from "@opentel/schemas";
 
 const dbUrl = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/opentel";
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-const natsUrl = process.env.NATS_URL || "nats://localhost:4222";
+// Prefer 127.0.0.1 so Docker-exposed NATS is reachable when Node resolves localhost to IPv6 (::1)
+const natsUrl = (process.env.NATS_URL || "nats://127.0.0.1:4222").replace(
+  /localhost/i,
+  "127.0.0.1"
+);
 const jwtSecret = process.env.JWT_SECRET || "dev-secret";
 const port = Number(process.env.SIGNALING_PORT) || 3001;
 
@@ -43,7 +51,9 @@ const callsEndedCounter = new Counter({
 
 const app = Fastify({ logger: true });
 
-app.register(websocket);
+app.get("/health", async (_req, reply) => {
+  return reply.send({ status: "ok", service: "signaling" });
+});
 
 app.get("/metrics", async (_req, reply) => {
   reply.header("Content-Type", register.contentType);
@@ -56,39 +66,41 @@ function send(ws: WebSocket, msg: object) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
-app.get("/ws", { websocket: true }, (conn, req) => {
+function handleWsConnection(ws: WebSocket) {
+  app.log.info("WebSocket client connected");
   let tenantId: string | null = null;
   let endpointId: string | null = null;
 
-  conn.socket.on("message", async (data: Buffer) => {
+  ws.on("message", async (data: Buffer | ArrayBuffer | Buffer[]) => {
+    const raw = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
     try {
-      const msg = JSON.parse(data.toString());
+      const msg = JSON.parse(raw.toString());
       if (msg.type === "auth") {
         const payload = verifyToken(jwtSecret, msg.token);
         tenantId = payload.tenantId;
-        conn.socket.send(JSON.stringify({ type: "auth_ok" }));
+        ws.send(JSON.stringify({ type: "auth_ok" }));
         return;
       }
       if (msg.type === "register") {
         if (!tenantId) {
-          conn.socket.send(JSON.stringify({ type: "error", message: "Auth first" }));
+          ws.send(JSON.stringify({ type: "error", message: "Auth first" }));
           return;
         }
         const eidReg = msg.endpointId;
         if (!eidReg || typeof eidReg !== "string") {
-          conn.socket.send(JSON.stringify({ type: "error", message: "Invalid endpointId" }));
+          ws.send(JSON.stringify({ type: "error", message: "Invalid endpointId" }));
           return;
         }
         endpointId = eidReg;
-        sockets.set(eidReg, { ws: conn.socket, tenantId });
+        sockets.set(eidReg, { ws, tenantId });
         wsConnectionsGauge.set(sockets.size);
         await setPresence(eidReg, true);
-        conn.socket.send(JSON.stringify({ type: "registered" }));
+        ws.send(JSON.stringify({ type: "registered" }));
         return;
       }
 
       if (!tenantId || !endpointId) {
-        conn.socket.send(JSON.stringify({ type: "error", message: "Auth and register first" }));
+        ws.send(JSON.stringify({ type: "error", message: "Auth and register first" }));
         return;
       }
 
@@ -98,7 +110,7 @@ app.get("/ws", { websocket: true }, (conn, req) => {
       if (msg.type === "dial") {
         const parsed = DialMessageSchema.safeParse(msg);
         if (!parsed.success) {
-          conn.socket.send(JSON.stringify({ type: "error", message: "Invalid dial" }));
+          ws.send(JSON.stringify({ type: "error", message: "Invalid dial" }));
           return;
         }
         const { toEndpointId, metadata } = parsed.data;
@@ -114,7 +126,7 @@ app.get("/ws", { websocket: true }, (conn, req) => {
         if (callee) {
           send(callee.ws, { type: "incoming_call", callId: call.id, fromEndpointId: eid, metadata, ts });
         }
-        send(conn.socket, { type: "call_created", callId: call.id, state: "RINGING" });
+        send(ws, { type: "call_created", callId: call.id, state: "RINGING" });
 
         const tenant = await getTenant(db, tid);
         if (tenant?.webhook_url) {
@@ -129,12 +141,12 @@ app.get("/ws", { websocket: true }, (conn, req) => {
         const sdp = msg.sdp;
         const call = await getCall(db, callId);
         if (!call || call.tenant_id !== tid) {
-          conn.socket.send(JSON.stringify({ type: "error", message: "Call not found" }));
+          ws.send(JSON.stringify({ type: "error", message: "Call not found" }));
           return;
         }
         const next = transitionCallState(call.state as "CREATED" | "RINGING" | "ANSWERED" | "ENDED", "ANSWER");
         if (!next) {
-          conn.socket.send(JSON.stringify({ type: "error", message: "Invalid state transition" }));
+          ws.send(JSON.stringify({ type: "error", message: "Invalid state transition" }));
           return;
         }
         await updateCallState(db, callId, next, new Date());
@@ -149,7 +161,7 @@ app.get("/ws", { websocket: true }, (conn, req) => {
         const tenant = await getTenant(db, tid);
         if (tenant?.webhook_url) deliverWebhook(tenant.webhook_url, "call.answered", { callId });
 
-        send(conn.socket, { type: "call_answered", callId });
+        send(ws, { type: "call_answered", callId });
         return;
       }
 
@@ -198,24 +210,42 @@ app.get("/ws", { websocket: true }, (conn, req) => {
         const tenant = await getTenant(db, tid);
         if (tenant?.webhook_url) deliverWebhook(tenant.webhook_url, "call.ended", { callId, reason: "hangup", duration, metadata: call.metadata });
 
-        send(conn.socket, { type: "call_ended", callId });
+        send(ws, { type: "call_ended", callId });
         return;
       }
     } catch (e) {
-      conn.socket.send(JSON.stringify({ type: "error", message: String(e) }));
+      ws.send(JSON.stringify({ type: "error", message: String(e) }));
     }
   });
 
-  conn.socket.on("close", () => {
+  ws.on("close", () => {
     if (endpointId) {
       sockets.delete(endpointId);
       wsConnectionsGauge.set(sockets.size);
       setPresence(endpointId, false);
     }
   });
-});
+}
 
-app.listen({ port, host: "0.0.0.0" }, (err) => {
-  if (err) throw err;
+async function start() {
+  await app.listen({ port, host: "0.0.0.0" });
+  const server = app.server;
+  if (!server) throw new Error("Fastify server not available");
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (request, socket, head) => {
+    if (request.url === "/ws" || request.url?.startsWith("/ws?")) {
+      wss.handleUpgrade(request, socket, head, (ws: WebSocket) => {
+        wss.emit("connection", ws, request);
+        handleWsConnection(ws);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
   console.log(`Signaling listening on http://localhost:${port}`);
+}
+
+start().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });

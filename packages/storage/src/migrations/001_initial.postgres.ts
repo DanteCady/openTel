@@ -35,15 +35,6 @@ export async function up(db: Kysely<any>): Promise<void> {
     .addColumn("answered_at", "timestamptz")
     .execute();
 
-  await db.schema
-    .createIndex("idx_endpoints_tenant")
-    .on("endpoints")
-    .column("tenant_id")
-    .execute();
-
-  await db.schema
-    .createIndex("idx_calls_tenant")
-    .on("calls")
-    .column("tenant_id")
-    .execute();
+  await sql`CREATE INDEX IF NOT EXISTS idx_endpoints_tenant ON endpoints(tenant_id)`.execute(db);
+  await sql`CREATE INDEX IF NOT EXISTS idx_calls_tenant ON calls(tenant_id)`.execute(db);
 }

@@ -34,6 +34,8 @@ Signaling: http://localhost:3001
 Docs: http://localhost:3000/docs  
 Grafana: http://localhost:3002 (admin/admin)
 
+Run everything (Docker + all four apps) with `pnpm dev`. If you get **address already in use**, run `pnpm dev:free` then `pnpm dev` again. See [docs/PORTS.md](docs/PORTS.md) for the full port map and troubleshooting.
+
 ### 4. First Call
 
 ```bash
@@ -44,14 +46,21 @@ pnpm opentel mint-token <tenantId> <aliceEndpointId>
 pnpm opentel mint-token <tenantId> <bobEndpointId>
 ```
 
-Open `infra/dev.html` in two browser tabs. Paste tokens and endpoint IDs, connect, then dial.
+Start the first-call demo app (Fluent UI, port 3004):
+
+```bash
+pnpm dev:demo
+```
+
+Open http://localhost:3004 in two browser tabs. Paste tokens and endpoint IDs (Alice in one tab, Bob in the other), click **Connect & Register**, then **Dial** from one tab and **Answer** in the other. Alternatively, use the static `infra/dev.html` (e.g. open the file or serve the repo and open `/infra/dev.html`).
 
 ## Structure
 
 - `apps/api` — REST API (tenants, endpoints, tokens, calls)
 - `apps/signaling` — WebSocket signaling for WebRTC
 - `apps/demo-cli` — CLI for provisioning
-- `apps/config-wizard` — Configuration wizard (Next.js + Fluent UI) — `pnpm dev:wizard` for port 3003
+- `apps/config-wizard` — Configuration wizard (Next.js + Fluent UI) — `pnpm dev:wizard` (port 3003)
+- `apps/dev-demo` — First-call demo (Next.js + Fluent UI) — `pnpm dev:demo` (port 3004)
 - `packages/schemas` — Zod schemas
 - `packages/core` — Call state machine
 - `packages/auth` — JWT mint/verify
@@ -63,6 +72,7 @@ Open `infra/dev.html` in two browser tabs. Paste tokens and endpoint IDs, connec
 
 ## Docs
 
+- [COMMANDS](docs/COMMANDS.md) — All pnpm scripts and CLI commands
 - [EMBEDDING_GUIDE](docs/EMBEDDING_GUIDE.md) — Integrate OpenTel into a CRM or app (backend + frontend + webhooks)
 - [GITFLOW](docs/GITFLOW.md) — Branching and commits
 - [ERROR_CODES](docs/ERROR_CODES.md) — API error catalog

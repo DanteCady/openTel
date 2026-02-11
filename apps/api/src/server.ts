@@ -1,4 +1,9 @@
-import "dotenv/config";
+import path from "node:path";
+import { config as dotenvConfig } from "dotenv";
+// Load root .env when running from apps/api (e.g. via turbo)
+dotenvConfig({ path: path.resolve(process.cwd(), "../../.env") });
+dotenvConfig(); // override with local .env if present
+import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
@@ -34,7 +39,7 @@ collectDefaultMetrics();
 const app = Fastify({ logger: true });
 
 app.addHook("onRequest", async (req, _reply) => {
-  (req as { requestId?: string }).requestId = crypto.randomUUID();
+  (req as { requestId?: string }).requestId = randomUUID();
 });
 
 app.setErrorHandler((err, req, reply) => {
