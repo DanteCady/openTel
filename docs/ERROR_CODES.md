@@ -29,6 +29,7 @@ All API errors return a consistent JSON shape:
 | `ENDPOINT_NOT_FOUND` | 404 | Endpoint id does not exist |
 | `CALL_NOT_FOUND` | 404 | Call id does not exist |
 | `THREAD_NOT_FOUND` | 404 | Chat thread id does not exist |
+| `CONFIG_ERROR` | 400 | Channel or secrets not configured |
 | `VALIDATION_ERROR` | 400 | Request body/query failed schema validation |
 | `INVALID_UUID` | 400 | Path param is not a valid UUID |
 | `NAME_REQUIRED` | 400 | Tenant name missing or empty |

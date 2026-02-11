@@ -129,9 +129,10 @@ export async function listEndpoints(
 export async function createCall(
   db: Kysely<Database>,
   tenantId: string,
-  fromEndpointId: string,
-  toEndpointId: string,
-  metadata?: Record<string, string> | null
+  fromEndpointId: string | null,
+  toEndpointId: string | null,
+  metadata?: Record<string, string> | null,
+  opts?: { toPhoneNumber?: string | null; fromPhoneNumber?: string | null }
 ): Promise<{ id: string; state: string }> {
   const id = randomUUID();
   const now = new Date();
@@ -142,6 +143,8 @@ export async function createCall(
       tenant_id: tenantId,
       from_endpoint_id: fromEndpointId,
       to_endpoint_id: toEndpointId,
+      from_phone_number: opts?.fromPhoneNumber ?? null,
+      to_phone_number: opts?.toPhoneNumber ?? null,
       state: "CREATED",
       metadata: metadata ?? null,
       created_at: now,
@@ -278,4 +281,128 @@ export async function listChatMessages(
     .limit(opts?.limit ?? 100)
     .offset(opts?.offset ?? 0)
     .execute();
+}
+
+// --- Channel config ---
+
+export async function getChannelConfig(
+  db: Kysely<Database>,
+  tenantId: string,
+  channel: string
+) {
+  return db
+    .selectFrom("channel_config")
+    .selectAll()
+    .where("tenant_id", "=", tenantId)
+    .where("channel", "=", channel)
+    .executeTakeFirst();
+}
+
+export async function upsertChannelConfig(
+  db: Kysely<Database>,
+  tenantId: string,
+  channel: string,
+  provider: string,
+  config: Record<string, unknown> | null
+) {
+  const now = new Date();
+  const existing = await getChannelConfig(db, tenantId, channel);
+  if (existing) {
+    await db
+      .updateTable("channel_config")
+      .set({ provider, config, updated_at: now })
+      .where("id", "=", existing.id)
+      .execute();
+    return { id: existing.id, tenant_id: tenantId, channel, provider, config, created_at: existing.created_at, updated_at: now };
+  }
+  const id = randomUUID();
+  await db
+    .insertInto("channel_config")
+    .values({
+      id,
+      tenant_id: tenantId,
+      channel,
+      provider,
+      config,
+      created_at: now,
+      updated_at: now,
+    })
+    .execute();
+  const row = await db.selectFrom("channel_config").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+  return row;
+}
+
+// --- Email ---
+
+export async function createEmailThread(
+  db: Kysely<Database>,
+  tenantId: string,
+  opts?: { contactId?: string | null; externalId?: string | null; metadata?: Record<string, string> | null }
+) {
+  const id = randomUUID();
+  const now = new Date();
+  await db
+    .insertInto("email_threads")
+    .values({
+      id,
+      tenant_id: tenantId,
+      contact_id: opts?.contactId ?? null,
+      external_id: opts?.externalId ?? null,
+      state: "open",
+      metadata: opts?.metadata ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    .execute();
+  const row = await db.selectFrom("email_threads").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+  return row;
+}
+
+export async function getEmailThread(db: Kysely<Database>, threadId: string) {
+  return db
+    .selectFrom("email_threads")
+    .selectAll()
+    .where("id", "=", threadId)
+    .executeTakeFirst();
+}
+
+export async function createEmailMessage(
+  db: Kysely<Database>,
+  threadId: string,
+  opts: {
+    direction: string;
+    fromAddress: string;
+    toAddress: string;
+    subject?: string | null;
+    bodyText?: string | null;
+    bodyHtml?: string | null;
+    providerMessageId?: string | null;
+    metadata?: Record<string, string> | null;
+  }
+) {
+  const id = randomUUID();
+  const now = new Date();
+  await db
+    .insertInto("email_messages")
+    .values({
+      id,
+      thread_id: threadId,
+      direction: opts.direction,
+      from_address: opts.fromAddress,
+      to_address: opts.toAddress,
+      subject: opts.subject ?? null,
+      body_text: opts.bodyText ?? null,
+      body_html: opts.bodyHtml ?? null,
+      provider_message_id: opts.providerMessageId ?? null,
+      metadata: opts.metadata ?? null,
+      created_at: now,
+    })
+    .execute();
+  await db
+    .updateTable("email_threads")
+    .set({ updated_at: now })
+    .where("id", "=", threadId)
+    .execute();
+  const row = await db.selectFrom("email_messages").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+  return row;
 }

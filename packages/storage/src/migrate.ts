@@ -18,6 +18,15 @@ async function migrate() {
     const { up: up2 } = await import("./migrations/002_chat.postgres.js");
     await up2(db);
     console.log("Ran 002_chat (postgres)");
+    const { up: up3 } = await import("./migrations/003_phase2_pstn.postgres.js");
+    await up3(db);
+    console.log("Ran 003_phase2_pstn (postgres)");
+    const { up: up4 } = await import("./migrations/004_channel_config.postgres.js");
+    await up4(db);
+    console.log("Ran 004_channel_config (postgres)");
+    const { up: up5 } = await import("./migrations/005_email.postgres.js");
+    await up5(db);
+    console.log("Ran 005_email (postgres)");
   } else {
     const { up: up1 } = await import("./migrations/001_initial.mysql.js");
     await up1(db);
@@ -25,6 +34,12 @@ async function migrate() {
     const { up: up2 } = await import("./migrations/002_chat.mysql.js");
     await up2(db);
     console.log("Ran 002_chat (mysql)");
+    const { up: up4 } = await import("./migrations/004_channel_config.mysql.js");
+    await up4(db);
+    console.log("Ran 004_channel_config (mysql)");
+    const { up: up5 } = await import("./migrations/005_email.mysql.js");
+    await up5(db);
+    console.log("Ran 005_email (mysql)");
   }
 
   await db.destroy();

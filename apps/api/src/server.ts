@@ -26,7 +26,14 @@ import {
   listChatThreads,
   createChatMessage,
   listChatMessages,
+  getChannelConfig,
+  upsertChannelConfig,
+  createEmailThread,
+  getEmailThread,
+  createEmailMessage,
 } from "@opentel/storage";
+import { createSecretsProvider } from "@opentel/secrets";
+import { sendViaSendGrid, sendViaMailgun } from "./email-send.js";
 import {
   CreateTenantInputSchema,
   CreateEndpointInputSchema,
@@ -363,6 +370,137 @@ app.get("/v1/tenants/:tenantId/chat/threads/:threadId/messages", async (req, rep
       createdAt: m.created_at,
     }))
   );
+});
+
+// --- Email channel ---
+
+function getSecrets() {
+  try {
+    return createSecretsProvider();
+  } catch (e) {
+    throw new OpenTelError(
+      "CONFIG_ERROR",
+      "Secrets provider not configured. Set SECRETS_ENCRYPTION_KEY and DATABASE_URL for encrypted_db.",
+      { cause: String(e) }
+    );
+  }
+}
+
+app.patch("/v1/tenants/:tenantId/channels/email", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId } = (req as { params: { tenantId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+
+  const body = (req as {
+    body?: { provider: string; config?: Record<string, string>; apiKey?: string };
+  }).body;
+  if (!body?.provider || !["sendgrid", "mailgun"].includes(body.provider)) {
+    throw new OpenTelError("VALIDATION_ERROR", "provider must be sendgrid or mailgun");
+  }
+  const config = body.config ?? {};
+  if (body.provider === "mailgun" && !config.domain) {
+    throw new OpenTelError("VALIDATION_ERROR", "Mailgun requires config.domain");
+  }
+  if (body.provider === "sendgrid" && !config.from) {
+    throw new OpenTelError("VALIDATION_ERROR", "SendGrid requires config.from");
+  }
+
+  const row = await upsertChannelConfig(db, tenantId, "email", body.provider, config as Record<string, unknown>);
+  if (body.apiKey) {
+    const secrets = getSecrets();
+    await secrets.set(tenantId, `email_${body.provider}_api_key`, body.apiKey);
+  }
+  return reply.send({
+    id: row.id,
+    tenantId: row.tenant_id,
+    channel: "email",
+    provider: row.provider,
+    config: row.config,
+  });
+});
+
+app.post("/v1/tenants/:tenantId/email/send", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId } = (req as { params: { tenantId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+
+  const body = (req as {
+    body?: {
+      to: string;
+      subject: string;
+      bodyText?: string;
+      bodyHtml?: string;
+      threadId?: string;
+      from?: string;
+    };
+  }).body;
+  if (!body?.to || !body?.subject) {
+    throw new OpenTelError("VALIDATION_ERROR", "to and subject are required");
+  }
+
+  const channelConfig = await getChannelConfig(db, tenantId, "email");
+  if (!channelConfig) {
+    throw new OpenTelError(
+      "CONFIG_ERROR",
+      "Email not configured for tenant. PATCH /channels/email first.",
+      { tenantId }
+    );
+  }
+
+  const secrets = getSecrets();
+  const apiKey = await secrets.get(tenantId, `email_${channelConfig.provider}_api_key`);
+  if (!apiKey) {
+    throw new OpenTelError(
+      "CONFIG_ERROR",
+      "Email API key not set. PATCH /channels/email with apiKey.",
+      { tenantId }
+    );
+  }
+
+  const config = (channelConfig.config ?? {}) as Record<string, string>;
+  const from = body.from ?? config.from ?? "noreply@example.com";
+
+  let messageId: string;
+  if (channelConfig.provider === "sendgrid") {
+    const result = await sendViaSendGrid(apiKey, {
+      to: body.to,
+      from,
+      subject: body.subject,
+      bodyText: body.bodyText,
+      bodyHtml: body.bodyHtml,
+    });
+    messageId = result.messageId;
+  } else if (channelConfig.provider === "mailgun") {
+    const domain = config.domain;
+    if (!domain) throw new OpenTelError("CONFIG_ERROR", "Mailgun domain not configured");
+    const result = await sendViaMailgun(apiKey, domain, {
+      to: body.to,
+      from,
+      subject: body.subject,
+      bodyText: body.bodyText,
+      bodyHtml: body.bodyHtml,
+    });
+    messageId = result.messageId;
+  } else {
+    throw new OpenTelError("CONFIG_ERROR", `Unsupported email provider: ${channelConfig.provider}`);
+  }
+
+  if (body.threadId) {
+    const thread = await getEmailThread(db, body.threadId);
+    if (thread && thread.tenant_id === tenantId) {
+      await createEmailMessage(db, body.threadId, {
+        direction: "outbound",
+        fromAddress: from,
+        toAddress: body.to,
+        subject: body.subject,
+        bodyText: body.bodyText ?? null,
+        bodyHtml: body.bodyHtml ?? null,
+        providerMessageId: messageId,
+      });
+    }
+  }
+
+  return reply.send({ messageId, sentAt: new Date().toISOString() });
 });
 
 if (process.env.NODE_ENV !== "test") {

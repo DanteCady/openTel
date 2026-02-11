@@ -116,4 +116,32 @@ export class OpenTelServerClient {
       `/v1/tenants/${tenantId}/chat/threads/${threadId}/messages${q ? `?${q}` : ""}`
     );
   }
+
+  // --- Email ---
+
+  async configureEmailChannel(
+    tenantId: string,
+    opts: { provider: "sendgrid" | "mailgun"; config: Record<string, string>; apiKey?: string }
+  ) {
+    return this.fetch<object>("PATCH", `/v1/tenants/${tenantId}/channels/email`, opts);
+  }
+
+  async sendEmail(
+    tenantId: string,
+    opts: {
+      to: string;
+      subject: string;
+      bodyText?: string;
+      bodyHtml?: string;
+      threadId?: string;
+      from?: string;
+    }
+  ) {
+    const res = await this.fetch<{ messageId: string; sentAt: string }>(
+      "POST",
+      `/v1/tenants/${tenantId}/email/send`,
+      opts
+    );
+    return res;
+  }
 }

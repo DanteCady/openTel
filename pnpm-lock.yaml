@@ -50,6 +50,9 @@ importers:
       '@opentel/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
+      '@opentel/secrets':
+        specifier: workspace:*
+        version: link:../../packages/secrets
       '@opentel/storage':
         specifier: workspace:*
         version: link:../../packages/storage
@@ -189,6 +192,9 @@ importers:
       '@opentel/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@opentel/gateway-client':
+        specifier: workspace:*
+        version: link:../../packages/gateway-client
       '@opentel/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
@@ -287,6 +293,22 @@ importers:
         specifier: ^2.28.0
         version: 2.29.3
     devDependencies:
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
+
+  packages/gateway-client:
+    dependencies:
+      '@opentel/schemas':
+        specifier: workspace:*
+        version: link:../schemas
+      esl:
+        specifier: ^11.2.1
+        version: 11.2.1
+    devDependencies:
+      '@types/node':
+        specifier: ^20.10.0
+        version: 20.19.33
       typescript:
         specifier: ^5.3.0
         version: 5.9.3
@@ -2104,6 +2126,9 @@ packages:
   escape-string-regexp@4.0.0:
     resolution: {integrity: sha512-TtpcNJ3XAzx3Gq8sWRzJaVajRs0uVxA2YAkdb1jm2YkPz4G6egUFAyA3n5vtEIZefPk5Wa4UXbKuS5fKkJWdgA==}
     engines: {node: '>=10'}
+
+  esl@11.2.1:
+    resolution: {integrity: sha512-H1qQHYbSgZ61yzzPh29HPFCoZC63ZkJ9t4YJJPlKmkqmNPUbeVCzM5dW6GzPkbm+6KIyejW2sXGegj8cqfzhhw==}
 
   eslint-scope@7.2.2:
     resolution: {integrity: sha512-dOt21O7lTMhDM+X9mB4GX+DZrZtCUJPL/wlcTqxyrx5IvO0IYtILdtrQGQp+8n5S0gwSVmOf9NQrjMOgfQZlIg==}
@@ -5595,6 +5620,8 @@ snapshots:
   escape-html@1.0.3: {}
 
   escape-string-regexp@4.0.0: {}
+
+  esl@11.2.1: {}
 
   eslint-scope@7.2.2:
     dependencies:

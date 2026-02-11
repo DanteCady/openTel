@@ -17,6 +17,7 @@
     "@opentel/auth": "workspace:*",
     "@opentel/errors": "workspace:*",
     "@opentel/schemas": "workspace:*",
+    "@opentel/secrets": "workspace:*",
     "@opentel/storage": "workspace:*",
     "@opentel/telemetry": "workspace:^",
     "dotenv": "^16.0.0",
