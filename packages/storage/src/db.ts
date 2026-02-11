@@ -13,6 +13,7 @@ export interface Database {
     tenant_id: string;
     label: string;
     type: string;
+    agent_state: string | null;
     created_at: Date;
   };
   calls: {
@@ -22,11 +23,30 @@ export interface Database {
     to_endpoint_id: string | null;
     from_phone_number: string | null;
     to_phone_number: string | null;
+    queue_id: string | null;
+    direction: string | null;
     state: string;
     metadata: Record<string, string> | null;
     created_at: Date;
     updated_at: Date;
     answered_at: Date | null;
+  };
+  queues: {
+    id: string;
+    tenant_id: string;
+    name: string;
+    routing_strategy: string;
+    max_wait_sec: number | null;
+    overflow_queue_id: string | null;
+    created_at: Date;
+  };
+  queue_members: {
+    id: string;
+    queue_id: string;
+    endpoint_id: string;
+    priority: number;
+    skills: Record<string, unknown> | null;
+    created_at: Date;
   };
   chat_threads: {
     id: string;
@@ -73,6 +93,17 @@ export interface Database {
     subject: string | null;
     body_text: string | null;
     body_html: string | null;
+    provider_message_id: string | null;
+    metadata: Record<string, string> | null;
+    created_at: Date;
+  };
+  sms_messages: {
+    id: string;
+    tenant_id: string;
+    direction: string;
+    from_number: string;
+    to_number: string;
+    body: string;
     provider_message_id: string | null;
     metadata: Record<string, string> | null;
     created_at: Date;

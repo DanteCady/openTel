@@ -144,4 +144,27 @@ export class OpenTelServerClient {
     );
     return res;
   }
+
+  // --- SMS ---
+
+  async configureSmsChannel(
+    tenantId: string,
+    opts: {
+      provider: "twilio";
+      config: { fromNumber: string };
+      accountSid?: string;
+      authToken?: string;
+    }
+  ) {
+    return this.fetch<object>("PATCH", `/v1/tenants/${tenantId}/channels/sms`, opts);
+  }
+
+  async sendSms(tenantId: string, opts: { to: string; body: string; from?: string }) {
+    const res = await this.fetch<{ messageId: string; sentAt: string }>(
+      "POST",
+      `/v1/tenants/${tenantId}/sms/send`,
+      opts
+    );
+    return res;
+  }
 }

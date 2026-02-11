@@ -31,9 +31,11 @@ import {
   createEmailThread,
   getEmailThread,
   createEmailMessage,
+  createSmsMessage,
 } from "@opentel/storage";
 import { createSecretsProvider } from "@opentel/secrets";
 import { sendViaSendGrid, sendViaMailgun } from "./email-send.js";
+import { sendViaTwilio } from "./sms-send.js";
 import {
   CreateTenantInputSchema,
   CreateEndpointInputSchema,
@@ -501,6 +503,96 @@ app.post("/v1/tenants/:tenantId/email/send", async (req, reply) => {
   }
 
   return reply.send({ messageId, sentAt: new Date().toISOString() });
+});
+
+// --- SMS channel ---
+
+app.patch("/v1/tenants/:tenantId/channels/sms", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId } = (req as { params: { tenantId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+
+  const body = (req as {
+    body?: { provider: string; config?: Record<string, string>; accountSid?: string; authToken?: string };
+  }).body;
+  if (!body?.provider || body.provider !== "twilio") {
+    throw new OpenTelError("VALIDATION_ERROR", "provider must be twilio");
+  }
+  const config = body.config ?? {};
+  if (!config.fromNumber) {
+    throw new OpenTelError("VALIDATION_ERROR", "SMS requires config.fromNumber (Twilio phone number)");
+  }
+
+  const row = await upsertChannelConfig(db, tenantId, "sms", "twilio", config as Record<string, unknown>);
+  if (body.accountSid) {
+    const secrets = getSecrets();
+    await secrets.set(tenantId, "sms_twilio_account_sid", body.accountSid);
+  }
+  if (body.authToken) {
+    const secrets = getSecrets();
+    await secrets.set(tenantId, "sms_twilio_auth_token", body.authToken);
+  }
+  return reply.send({
+    id: row.id,
+    tenantId: row.tenant_id,
+    channel: "sms",
+    provider: row.provider,
+    config: row.config,
+  });
+});
+
+app.post("/v1/tenants/:tenantId/sms/send", async (req, reply) => {
+  requireAuth(req);
+  const { tenantId } = (req as { params: { tenantId: string } }).params;
+  validateUuid(tenantId, "tenantId");
+
+  const body = (req as { body?: { to: string; body: string; from?: string } }).body;
+  if (!body?.to || !body?.body) {
+    throw new OpenTelError("VALIDATION_ERROR", "to and body are required");
+  }
+
+  const channelConfig = await getChannelConfig(db, tenantId, "sms");
+  if (!channelConfig) {
+    throw new OpenTelError(
+      "CONFIG_ERROR",
+      "SMS not configured for tenant. PATCH /channels/sms first.",
+      { tenantId }
+    );
+  }
+
+  const secrets = getSecrets();
+  const accountSid = await secrets.get(tenantId, "sms_twilio_account_sid");
+  const authToken = await secrets.get(tenantId, "sms_twilio_auth_token");
+  if (!accountSid || !authToken) {
+    throw new OpenTelError(
+      "CONFIG_ERROR",
+      "SMS Twilio credentials not set. PATCH /channels/sms with accountSid and authToken.",
+      { tenantId }
+    );
+  }
+
+  const config = (channelConfig.config ?? {}) as Record<string, string>;
+  const from = body.from ?? config.fromNumber;
+  if (!from) throw new OpenTelError("CONFIG_ERROR", "SMS fromNumber not configured");
+
+  const result = await sendViaTwilio(accountSid, authToken, {
+    to: body.to,
+    from,
+    body: body.body,
+  });
+
+  await createSmsMessage(db, tenantId, {
+    direction: "outbound",
+    fromNumber: from,
+    toNumber: body.to,
+    body: body.body,
+    providerMessageId: result.messageId,
+  });
+
+  return reply.send({
+    messageId: result.messageId,
+    sentAt: new Date().toISOString(),
+  });
 });
 
 if (process.env.NODE_ENV !== "test") {

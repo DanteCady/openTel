@@ -132,7 +132,12 @@ export async function createCall(
   fromEndpointId: string | null,
   toEndpointId: string | null,
   metadata?: Record<string, string> | null,
-  opts?: { toPhoneNumber?: string | null; fromPhoneNumber?: string | null }
+  opts?: {
+    toPhoneNumber?: string | null;
+    fromPhoneNumber?: string | null;
+    queueId?: string | null;
+    direction?: string | null;
+  }
 ): Promise<{ id: string; state: string }> {
   const id = randomUUID();
   const now = new Date();
@@ -145,6 +150,8 @@ export async function createCall(
       to_endpoint_id: toEndpointId,
       from_phone_number: opts?.fromPhoneNumber ?? null,
       to_phone_number: opts?.toPhoneNumber ?? null,
+      queue_id: opts?.queueId ?? null,
+      direction: opts?.direction ?? null,
       state: "CREATED",
       metadata: metadata ?? null,
       created_at: now,
@@ -334,6 +341,112 @@ export async function upsertChannelConfig(
 
 // --- Email ---
 
+// --- Queues ---
+
+export async function createQueue(
+  db: Kysely<Database>,
+  tenantId: string,
+  name: string,
+  opts?: { routingStrategy?: string; maxWaitSec?: number | null; overflowQueueId?: string | null }
+) {
+  const id = randomUUID();
+  await db
+    .insertInto("queues")
+    .values({
+      id,
+      tenant_id: tenantId,
+      name,
+      routing_strategy: opts?.routingStrategy ?? "round-robin",
+      max_wait_sec: opts?.maxWaitSec ?? null,
+      overflow_queue_id: opts?.overflowQueueId ?? null,
+      created_at: new Date(),
+    })
+    .execute();
+  const row = await db.selectFrom("queues").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+  return row;
+}
+
+export async function getQueue(db: Kysely<Database>, queueId: string) {
+  return db
+    .selectFrom("queues")
+    .selectAll()
+    .where("id", "=", queueId)
+    .executeTakeFirst();
+}
+
+export async function listQueues(
+  db: Kysely<Database>,
+  tenantId: string,
+  opts?: { limit?: number; offset?: number }
+) {
+  return db
+    .selectFrom("queues")
+    .selectAll()
+    .where("tenant_id", "=", tenantId)
+    .orderBy("name", "asc")
+    .limit(opts?.limit ?? 50)
+    .offset(opts?.offset ?? 0)
+    .execute();
+}
+
+export async function addQueueMember(
+  db: Kysely<Database>,
+  queueId: string,
+  endpointId: string,
+  opts?: { priority?: number; skills?: Record<string, unknown> | null }
+) {
+  const id = randomUUID();
+  await db
+    .insertInto("queue_members")
+    .values({
+      id,
+      queue_id: queueId,
+      endpoint_id: endpointId,
+      priority: opts?.priority ?? 0,
+      skills: opts?.skills ?? null,
+      created_at: new Date(),
+    })
+    .execute();
+  const row = await db
+    .selectFrom("queue_members")
+    .selectAll()
+    .where("id", "=", id)
+    .executeTakeFirstOrThrow();
+  return row;
+}
+
+export async function removeQueueMember(db: Kysely<Database>, queueId: string, endpointId: string) {
+  await db
+    .deleteFrom("queue_members")
+    .where("queue_id", "=", queueId)
+    .where("endpoint_id", "=", endpointId)
+    .execute();
+}
+
+export async function listQueueMembers(db: Kysely<Database>, queueId: string) {
+  return db
+    .selectFrom("queue_members")
+    .selectAll()
+    .where("queue_id", "=", queueId)
+    .orderBy("priority", "desc")
+    .orderBy("created_at", "asc")
+    .execute();
+}
+
+export async function updateEndpointAgentState(
+  db: Kysely<Database>,
+  endpointId: string,
+  agentState: string | null
+) {
+  await db
+    .updateTable("endpoints")
+    .set({ agent_state: agentState })
+    .where("id", "=", endpointId)
+    .execute();
+}
+
+// --- Email ---
+
 export async function createEmailThread(
   db: Kysely<Database>,
   tenantId: string,
@@ -404,5 +517,39 @@ export async function createEmailMessage(
     .where("id", "=", threadId)
     .execute();
   const row = await db.selectFrom("email_messages").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+  return row;
+}
+
+// --- SMS ---
+
+export async function createSmsMessage(
+  db: Kysely<Database>,
+  tenantId: string,
+  opts: {
+    direction: string;
+    fromNumber: string;
+    toNumber: string;
+    body: string;
+    providerMessageId?: string | null;
+    metadata?: Record<string, string> | null;
+  }
+) {
+  const id = randomUUID();
+  const now = new Date();
+  await db
+    .insertInto("sms_messages")
+    .values({
+      id,
+      tenant_id: tenantId,
+      direction: opts.direction,
+      from_number: opts.fromNumber,
+      to_number: opts.toNumber,
+      body: opts.body,
+      provider_message_id: opts.providerMessageId ?? null,
+      metadata: opts.metadata ?? null,
+      created_at: now,
+    })
+    .execute();
+  const row = await db.selectFrom("sms_messages").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
   return row;
 }
