@@ -1,7 +1,9 @@
 /**
- * Email sending via transactional providers.
- * API keys are fetched from SecretsProvider.
+ * Email sending via transactional providers and custom SMTP.
+ * API keys and passwords are fetched from SecretsProvider.
  */
+
+import nodemailer from "nodemailer";
 
 export interface SendEmailParams {
   to: string;
@@ -66,4 +68,40 @@ export async function sendViaMailgun(
     throw new Error(`Mailgun error ${res.status}: ${JSON.stringify(json)}`);
   }
   return { messageId: json.id ?? "unknown" };
+}
+
+export interface SmtpTransportOptions {
+  host: string;
+  port: number;
+  secure: boolean;
+  user?: string;
+  password: string;
+}
+
+/**
+ * Send via custom SMTP (Nodemailer). Works with any SMTP server:
+ * self-hosted, Purelymail, Amazon SES SMTP, etc.
+ */
+export async function sendViaSmtp(
+  options: SmtpTransportOptions,
+  params: SendEmailParams
+): Promise<{ messageId: string }> {
+  const transporter = nodemailer.createTransport({
+    host: options.host,
+    port: options.port,
+    secure: options.secure,
+    auth:
+      options.user && options.password
+        ? { user: options.user, pass: options.password }
+        : undefined,
+  });
+  const info = await transporter.sendMail({
+    from: params.from,
+    to: params.to,
+    subject: params.subject,
+    text: params.bodyText,
+    html: params.bodyHtml,
+    replyTo: params.replyTo,
+  });
+  return { messageId: info.messageId ?? "unknown" };
 }

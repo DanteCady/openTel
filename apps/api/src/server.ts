@@ -44,7 +44,7 @@ import {
   setAgentState,
 } from "@opentel/storage";
 import { createSecretsProvider } from "@opentel/secrets";
-import { sendViaSendGrid, sendViaMailgun } from "./email-send.js";
+import { sendViaSendGrid, sendViaMailgun, sendViaSmtp } from "./email-send.js";
 import { sendViaTwilio } from "./sms-send.js";
 import {
   CreateTenantInputSchema,
@@ -574,10 +574,19 @@ app.patch("/v1/tenants/:tenantId/channels/email", async (req, reply) => {
   validateUuid(tenantId, "tenantId");
 
   const body = (req as {
-    body?: { provider: string; config?: Record<string, string>; apiKey?: string };
+    body?: {
+      provider: string;
+      config?: Record<string, string>;
+      apiKey?: string;
+      password?: string;
+    };
   }).body;
-  if (!body?.provider || !["sendgrid", "mailgun"].includes(body.provider)) {
-    throw new OpenTelError("VALIDATION_ERROR", "provider must be sendgrid or mailgun");
+  const allowed = ["sendgrid", "mailgun", "smtp"];
+  if (!body?.provider || !allowed.includes(body.provider)) {
+    throw new OpenTelError(
+      "VALIDATION_ERROR",
+      `provider must be one of: ${allowed.join(", ")}`
+    );
   }
   const config = body.config ?? {};
   if (body.provider === "mailgun" && !config.domain) {
@@ -586,11 +595,26 @@ app.patch("/v1/tenants/:tenantId/channels/email", async (req, reply) => {
   if (body.provider === "sendgrid" && !config.from) {
     throw new OpenTelError("VALIDATION_ERROR", "SendGrid requires config.from");
   }
+  if (body.provider === "smtp") {
+    if (!config.host || config.port === undefined) {
+      throw new OpenTelError(
+        "VALIDATION_ERROR",
+        "SMTP requires config.host and config.port"
+      );
+    }
+    if (!config.from) {
+      throw new OpenTelError("VALIDATION_ERROR", "SMTP requires config.from");
+    }
+  }
 
   const row = await upsertChannelConfig(db, tenantId, "email", body.provider, config as Record<string, unknown>);
   if (body.apiKey) {
     const secrets = getSecrets();
     await secrets.set(tenantId, `email_${body.provider}_api_key`, body.apiKey);
+  }
+  if (body.provider === "smtp" && body.password) {
+    const secrets = getSecrets();
+    await secrets.set(tenantId, "email_smtp_password", body.password);
   }
   return reply.send({
     id: row.id,
@@ -630,20 +654,19 @@ app.post("/v1/tenants/:tenantId/email/send", async (req, reply) => {
   }
 
   const secrets = getSecrets();
-  const apiKey = await secrets.get(tenantId, `email_${channelConfig.provider}_api_key`);
-  if (!apiKey) {
-    throw new OpenTelError(
-      "CONFIG_ERROR",
-      "Email API key not set. PATCH /channels/email with apiKey.",
-      { tenantId }
-    );
-  }
-
   const config = (channelConfig.config ?? {}) as Record<string, string>;
   const from = body.from ?? config.from ?? "noreply@example.com";
 
   let messageId: string;
   if (channelConfig.provider === "sendgrid") {
+    const apiKey = await secrets.get(tenantId, "email_sendgrid_api_key");
+    if (!apiKey) {
+      throw new OpenTelError(
+        "CONFIG_ERROR",
+        "Email API key not set. PATCH /channels/email with apiKey.",
+        { tenantId }
+      );
+    }
     const result = await sendViaSendGrid(apiKey, {
       to: body.to,
       from,
@@ -653,6 +676,14 @@ app.post("/v1/tenants/:tenantId/email/send", async (req, reply) => {
     });
     messageId = result.messageId;
   } else if (channelConfig.provider === "mailgun") {
+    const apiKey = await secrets.get(tenantId, "email_mailgun_api_key");
+    if (!apiKey) {
+      throw new OpenTelError(
+        "CONFIG_ERROR",
+        "Email API key not set. PATCH /channels/email with apiKey.",
+        { tenantId }
+      );
+    }
     const domain = config.domain;
     if (!domain) throw new OpenTelError("CONFIG_ERROR", "Mailgun domain not configured");
     const result = await sendViaMailgun(apiKey, domain, {
@@ -662,6 +693,36 @@ app.post("/v1/tenants/:tenantId/email/send", async (req, reply) => {
       bodyText: body.bodyText,
       bodyHtml: body.bodyHtml,
     });
+    messageId = result.messageId;
+  } else if (channelConfig.provider === "smtp") {
+    const password = await secrets.get(tenantId, "email_smtp_password");
+    if (!password) {
+      throw new OpenTelError(
+        "CONFIG_ERROR",
+        "SMTP password not set. PATCH /channels/email with password.",
+        { tenantId }
+      );
+    }
+    const port = Number(config.port);
+    if (Number.isNaN(port)) {
+      throw new OpenTelError("CONFIG_ERROR", "SMTP config.port must be a number");
+    }
+    const result = await sendViaSmtp(
+      {
+        host: config.host,
+        port,
+        secure: config.secure === "true" || config.secure === "1",
+        user: config.user,
+        password,
+      },
+      {
+        to: body.to,
+        from,
+        subject: body.subject,
+        bodyText: body.bodyText,
+        bodyHtml: body.bodyHtml,
+      }
+    );
     messageId = result.messageId;
   } else {
     throw new OpenTelError("CONFIG_ERROR", `Unsupported email provider: ${channelConfig.provider}`);
