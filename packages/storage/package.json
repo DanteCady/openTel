@@ -1,0 +1,25 @@
+{
+  "name": "@opentel/storage",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/",
+    "migrate": "tsx src/migrate.ts"
+  },
+  "dependencies": {
+    "@opentel/schemas": "workspace:*",
+    "dotenv": "^16.0.0",
+    "kysely": "^0.27.0",
+    "mysql2": "^3.11.0",
+    "pg": "^8.11.0",
+    "ioredis": "^5.3.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.10.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.3.0"
+  }
+}

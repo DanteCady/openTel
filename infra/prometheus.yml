@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "opentel-api"
+    static_configs:
+      - targets: ["host.docker.internal:3000"]
+    metrics_path: /metrics
+  - job_name: "opentel-signaling"
+    static_configs:
+      - targets: ["host.docker.internal:3001"]
+    metrics_path: /metrics

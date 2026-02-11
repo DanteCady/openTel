@@ -1,0 +1,31 @@
+{
+  "name": "opentel",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.14.2",
+  "scripts": {
+    "i": "pnpm install",
+    "opentel": "pnpm --filter @opentel/demo-cli exec tsx src/cli.ts",
+    "dev": "turbo run dev --parallel --filter=./apps/api --filter=./apps/signaling",
+    "dev:all": "turbo run dev --parallel",
+    "dev:wizard": "pnpm --filter @opentel/config-wizard dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "db:migrate": "pnpm --filter @opentel/storage exec tsx src/migrate.ts",
+    "autoconfigure": "./scripts/autoconfigure.sh",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.56.0",
+    "prettier": "^3.2.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.3.0"
+  }
+}

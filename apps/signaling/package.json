@@ -1,0 +1,30 @@
+{
+  "name": "@opentel/signaling",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@opentel/auth": "workspace:*",
+    "@opentel/core": "workspace:*",
+    "@opentel/events": "workspace:*",
+    "@opentel/schemas": "workspace:*",
+    "@opentel/storage": "workspace:*",
+    "@fastify/websocket": "^8.0.0",
+    "dotenv": "^16.0.0",
+    "fastify": "^4.25.0",
+    "pino": "^8.17.0",
+    "pino-pretty": "^10.3.0",
+    "prom-client": "^15.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.3.0"
+  }
+}
