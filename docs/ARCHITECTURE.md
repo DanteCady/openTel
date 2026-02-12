@@ -10,7 +10,8 @@ This document describes the system components, data flow, and multi-tenancy mode
 | **Signaling** | WebSocket server that handles auth, endpoint registration, and call signaling (dial, answer, offer/answer SDP, ICE). Routes messages between endpoints and persists call state to the database. |
 | **Storage** | Postgres (tenants, endpoints, calls) and Redis (presence). Accessed by both API and Signaling. |
 | **Events** | NATS pub/sub for call and signaling events. Enables future subscribers (analytics, recording triggers) and keeps event catalog consistent. |
-| **Config wizard** | Step-by-step UI for initial setup (database, Redis, NATS, JWT, TURN/STUN; SIP/SBC placeholder for Phase 2). |
+| **Gateway client** | Package that talks to **FreeSWITCH** over ESL (Event Socket Layer): originate outbound PSTN calls, hangup, and receive inbound-call notifications. Used by Signaling when Phase 2 is enabled (`OPENTEL_GATEWAY_URL`). |
+| **Config wizard** | Step-by-step UI for initial setup (database, Redis, NATS, JWT, TURN/STUN, SIP/SBC). |
 | **Client SDK** | Browser SDK for embedding: connect, register, dial, answer, hangup, ICE. |
 | **Server SDK** | Node.js SDK for app backends: create tenant/endpoints, mint tokens, list calls. |
 
@@ -21,6 +22,7 @@ This document describes the system components, data flow, and multi-tenancy mode
 - **Signaling → NATS**: Every call and signaling event is published to NATS (`opentel.calls`) for observability and future consumers.
 - **Signaling → Webhooks**: When a tenant has a `webhookUrl`, the signaling server POSTs call events (call.created, call.ringing, call.answered, call.ended) to that URL. Used by CRM backends to log calls to contact records.
 - **Signaling ↔ Clients**: Browsers connect over WebSocket, authenticate with JWT, register an endpoint ID, then exchange dial / incoming_call / answer / offer / ice messages via the same socket.
+- **Signaling ↔ FreeSWITCH (Phase 2)**: When PSTN is enabled, Signaling uses the gateway-client to call `originateToPstn(phone)` for outbound calls and exposes `POST /inbound-call` for the gateway to notify OpenTel of inbound calls. OpenTel does not talk to the SBC or trunk directly—FreeSWITCH sits between OpenTel and the SIP world.
 
 ## Call State Machine
 
@@ -39,8 +41,14 @@ See [DIAGRAMS.md](./DIAGRAMS.md) for the state machine diagram.
 - **Endpoint**: A phone-capable identity within a tenant (e.g. an agent or rep). Endpoints are referenced by UUID. JWT tokens are minted per tenant and optionally scoped to an endpoint.
 - **Isolation**: The API and Signaling enforce tenant isolation. Tokens carry `tenantId`; all operations (list endpoints, list calls, get call, dial target) are scoped to that tenant. The signaling server verifies that the registered endpoint belongs to the token’s tenant before allowing dial/answer/hangup.
 
+## Phase 2: PSTN and FreeSWITCH
+
+- **WebRTC-only** deployments need no gateway: OpenTel + TURN (e.g. coturn) are enough for browser-to-browser calls.
+- **PSTN** (calling or receiving real phone numbers) requires a **media gateway**. OpenTel integrates with **FreeSWITCH** via ESL only (Asterisk/AMI is not supported).
+- You run FreeSWITCH and your own **SBC** and **SIP trunk**; OpenTel’s gateway-client connects to FreeSWITCH and tells it to originate calls or receives inbound-call notifications via `POST /inbound-call`. Bridge-on-answer (connecting the SIP leg to the agent’s WebRTC leg) is done in FreeSWITCH (dialplan/script). See [DIAGRAMS.md](./DIAGRAMS.md) and [PHASE2_PSTN.md](./PHASE2_PSTN.md).
+
 ## Deployment Notes
 
 - API and Signaling can run on the same host or separately. They share the same Postgres, Redis, and NATS URLs.
-- Media (RTP) flows peer-to-peer or via a self-hosted TURN server (e.g. coturn); see [MEDIA_ARCHITECTURE.md](./MEDIA_ARCHITECTURE.md).
-- For a single-deployment option, the config wizard can be built and served from the API at `/config` (optional; see plan).
+- Media (RTP): WebRTC flows peer-to-peer or via a self-hosted TURN server (e.g. coturn); see [MEDIA_ARCHITECTURE.md](./MEDIA_ARCHITECTURE.md). For PSTN, media is handled by FreeSWITCH.
+- Production: see [DEPLOYMENT.md](./DEPLOYMENT.md) for deploy path, env vars, and runbooks.

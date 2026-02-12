@@ -1,35 +1,70 @@
 # OpenTel Diagrams
 
-This document contains the main architecture and flow diagrams from the OpenTel plan. See [ARCHITECTURE.md](./ARCHITECTURE.md) for narrative and [MEDIA_ARCHITECTURE.md](./MEDIA_ARCHITECTURE.md) for media details.
+This document contains the main architecture and flow diagrams. See [ARCHITECTURE.md](./ARCHITECTURE.md) for narrative and [PHASE2_PSTN.md](./PHASE2_PSTN.md) for PSTN/FreeSWITCH setup.
 
 ---
 
-## 1. Media Architecture: How Calls Work (No Twilio)
+## 0. System Overview
 
-Phase 1 is WebRTC app-to-app; Phase 2+ adds PSTN via SIP and a media gateway.
+OpenTel core: API (REST), Signaling (WebSocket), Storage (Postgres + Redis), Events (NATS + webhooks). For real phone numbers you add FreeSWITCH and your SBC/trunk; OpenTel controls the gateway via ESL.
 
 ```mermaid
 flowchart TB
-    subgraph phase1 [Phase 1 - WebRTC App-to-App]
+    subgraph apps [Your App]
+        Backend[Backend]
+        Frontend[Frontend / Agents]
+    end
+
+    subgraph opentel [OpenTel]
+        API[API\nREST]
+        Signaling[Signaling\nWebSocket]
+        Storage[(Postgres\n+ Redis)]
+        Events[NATS + Webhooks]
+        API <--> Storage
+        Signaling <--> Storage
+        Signaling --> Events
+    end
+
+    subgraph pstn [PSTN - Optional]
+        FS[FreeSWITCH\nESL]
+        SBC[SBC + Trunk]
+        FS <--> SBC
+    end
+
+    Backend <--> API
+    Frontend <--> Signaling
+    Signaling <-->|ESL| FS
+```
+
+---
+
+## 1. Media Architecture: How Calls Work
+
+**WebRTC-only:** app-to-app calls use OpenTel Signaling for SDP/ICE; media goes P2P or via TURN (e.g. coturn). **PSTN:** real phone calls use a media gateway (FreeSWITCH) and your SBC/trunk. OpenTel controls the gateway via ESL; it does not replace your SBC or carrier.
+
+```mermaid
+flowchart TB
+    subgraph phase1 [WebRTC App-to-App]
         BrowserA[Browser/App A]
         BrowserB[Browser/App B]
-        OpenTel[OpenTel Signaling]
+        OpenTelSig[OpenTel Signaling]
         TURN[Self-hosted TURN - coturn]
-        BrowserA <-->|"SDP/ICE via WS"| OpenTel
-        BrowserB <-->|"SDP/ICE via WS"| OpenTel
+        BrowserA <-->|"SDP/ICE via WS"| OpenTelSig
+        BrowserB <-->|"SDP/ICE via WS"| OpenTelSig
         BrowserA <-->|"RTP media"| TURN
         BrowserB <-->|"RTP media"| TURN
         BrowserA <-.->|"P2P when possible"| BrowserB
     end
 
-    subgraph phase2 [Phase 2+ - PSTN via SIP]
+    subgraph phase2 [PSTN - You run FreeSWITCH + SBC/trunk]
         App[Browser/App]
-        Gateway[FreeSWITCH / Asterisk]
-        SBC[Company SBC]
-        SIPTrunk[Company SIP Trunk]
+        OpenTelCtrl[OpenTel Signaling]
+        Gateway[FreeSWITCH\nESL]
+        SBC[Your SBC]
+        SIPTrunk[Your SIP Trunk]
         PSTN[Phone Network]
         App <-->|WebRTC| Gateway
-        OpenTel <-->|SIP control| Gateway
+        OpenTelCtrl <-->|"ESL (originate, hangup)"| Gateway
         Gateway <-->|SIP| SBC
         SBC <-->|SIP| SIPTrunk
         SIPTrunk <--> PSTN
@@ -89,55 +124,57 @@ Implemented in `packages/core` (e.g. `transitionCallState`).
 
 ---
 
-## 4. SBC, OpenTel, and Customer Product Integration
+## 4. Full Stack: Your App, OpenTel, FreeSWITCH, SBC
 
-How a **customer’s product** (CRM, contact center, support tool), **OpenTel**, and the customer’s **SBC** (and carrier) fit together. The customer runs OpenTel and their own app; they bring their SBC and SIP trunk.
+How your product (CRM, contact center, support tool), **OpenTel**, **FreeSWITCH**, and your **SBC/trunk** fit together. You run OpenTel and your app; you also run FreeSWITCH and bring your own SBC and SIP trunk for PSTN.
 
 ```mermaid
-flowchart TB
-    subgraph customer [Customer's Product]
-        Backend[App Backend\nCRM / Contact Center]
-        Frontend[App Frontend\nAgents in browser]
-        Backend <-->|"token, config"| Frontend
+flowchart LR
+    subgraph your [Your Product]
+        Backend[App Backend]
+        Frontend[Agents in browser]
+        Backend <-->|token, config| Frontend
     end
 
     subgraph opentel [OpenTel]
-        API[REST API\ntenants, endpoints, tokens, calls]
-        Signaling[Signaling\nWebSocket SDP/ICE]
-        Storage[(Storage\nPostgres + Redis)]
+        API[REST API]
+        Signaling[Signaling WS]
+        Storage[(Postgres + Redis)]
         API <--> Storage
         Signaling <--> Storage
     end
 
-    subgraph carrier [Carrier Side - You Provide]
-        SBC[SBC\nSession Border Controller]
+    subgraph gateway [Media Gateway - You Run]
+        FreeSWITCH[FreeSWITCH\nESL]
+    end
+
+    subgraph carrier [You Provide]
+        SBC[SBC]
         Trunk[SIP Trunk]
-        PSTN[PSTN / Phone Network]
+        PSTN[PSTN]
         SBC <-->|SIP| Trunk
         Trunk <--> PSTN
     end
 
-    subgraph media [Media Gateway - Phase 2]
-        Gateway[FreeSWITCH / Asterisk]
-    end
-
-    Backend -->|"REST: create tenant, endpoints, mint token"| API
-    Backend <--|"Webhooks: call.created, call.ended (from OpenTel)"| Signaling
-    Frontend <-->|"WebSocket: auth, register, dial, answer, SDP/ICE"| Signaling
-    Frontend <-->|"WebRTC media"| Gateway
-    Signaling <-.->|"SIP control (Phase 2)"| Gateway
-    Gateway <-->|SIP| SBC
+    Backend -->|REST: tenants, endpoints, tokens| API
+    Backend <--|Webhooks| Signaling
+    Frontend <-->|WS: dial, answer, SDP/ICE| Signaling
+    Frontend <-->|WebRTC| FreeSWITCH
+    Signaling <-->|ESL: originate, hangup, inbound-call| FreeSWITCH
+    FreeSWITCH <-->|SIP| SBC
 ```
 
 **Responsibilities**
 
 | Party | Provides |
 |-------|----------|
-| **Customer’s product** | App backend (provisioning, webhook handler, business logic) and frontend (agent UI, client-sdk for connect/dial/answer). |
-| **OpenTel** | REST API, WebSocket signaling, call state, events, webhooks. No media; in Phase 2 it controls the media gateway. |
-| **SBC + trunk** | Your SBC and SIP trunk (from your carrier). OpenTel does not replace them—the gateway talks SIP to your SBC. |
+| **Your product** | App backend (provisioning, webhook handler) and frontend (agent UI, client SDK for connect/dial/answer). |
+| **OpenTel** | REST API, WebSocket signaling, call state, events, webhooks. Controls FreeSWITCH via ESL; does not run media. |
+| **FreeSWITCH** | Media gateway: bridges WebRTC (browser) and SIP. You run it; OpenTel’s gateway-client talks to it over ESL. |
+| **SBC + trunk** | Your SBC and SIP trunk (from your carrier). FreeSWITCH registers or sends SIP to your SBC; OpenTel does not talk to the SBC directly. |
 
 **Flows**
 
-- **App-to-app (Phase 1):** Frontend ↔ OpenTel Signaling (SDP/ICE); media is P2P or via TURN (e.g. coturn). No SBC.
-- **App-to-phone (Phase 2):** Frontend ↔ OpenTel Signaling; OpenTel tells the gateway to bridge WebRTC ↔ SIP; gateway ↔ SBC ↔ trunk ↔ PSTN. Same webhooks and call state for the customer’s backend.
+- **WebRTC-only:** Frontend ↔ OpenTel Signaling (SDP/ICE); media P2P or via TURN (coturn). No FreeSWITCH or SBC.
+- **Outbound PSTN:** User dials a number → Signaling calls gateway-client `originateToPstn()` → FreeSWITCH originates to SBC/trunk → PSTN.
+- **Inbound PSTN:** Call hits trunk → SBC → FreeSWITCH; FreeSWITCH (or script) POSTs to OpenTel `POST /inbound-call` → OpenTel creates call and rings endpoint; on answer, FreeSWITCH bridges SIP leg to WebRTC. See [PHASE2_PSTN.md](PHASE2_PSTN.md).
