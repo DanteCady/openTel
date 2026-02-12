@@ -573,3 +573,39 @@ export async function createSmsMessage(
   const row = await db.selectFrom("sms_messages").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
   return row;
 }
+
+// --- Users (email auth for CCaaS) ---
+
+export async function createUser(
+  db: Kysely<Database>,
+  email: string,
+  passwordHash: string,
+  tenantId: string,
+  endpointId: string
+): Promise<{ id: string; email: string; tenant_id: string; endpoint_id: string; created_at: Date }> {
+  const id = randomUUID();
+  await db
+    .insertInto("users")
+    .values({
+      id,
+      email: email.toLowerCase().trim(),
+      password_hash: passwordHash,
+      tenant_id: tenantId,
+      endpoint_id: endpointId,
+      created_at: new Date(),
+    })
+    .execute();
+  const row = await db.selectFrom("users").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+  return row;
+}
+
+export async function getUserByEmail(
+  db: Kysely<Database>,
+  email: string
+): Promise<{ id: string; email: string; password_hash: string; tenant_id: string; endpoint_id: string; created_at: Date } | undefined> {
+  return db
+    .selectFrom("users")
+    .selectAll()
+    .where("email", "=", email.toLowerCase().trim())
+    .executeTakeFirst();
+}

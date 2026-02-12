@@ -8,6 +8,7 @@ initTracing("opentel-api");
 import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { mintToken, verifyToken } from "@opentel/auth";
@@ -42,7 +43,10 @@ import {
   getEndpoint,
   updateEndpointAgentState,
   setAgentState,
+  createUser,
+  getUserByEmail,
 } from "@opentel/storage";
+import bcrypt from "bcryptjs";
 import { createSecretsProvider } from "@opentel/secrets";
 import {
   sendViaSendGrid,
@@ -75,6 +79,9 @@ const dbUrl = process.env.DATABASE_URL || "postgresql://postgres:postgres@localh
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const jwtSecret = process.env.JWT_SECRET || "dev-secret";
 const port = Number(process.env.API_PORT) || 3000;
+const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED === "1" || process.env.RATE_LIMIT_ENABLED === "true";
+const rateLimitMax = Math.max(1, parseInt(process.env.RATE_LIMIT_MAX ?? "200", 10));
+const rateLimitTimeWindowMs = Math.max(1000, parseInt(process.env.RATE_LIMIT_TIME_WINDOW_MS ?? "60000", 10));
 
 const db = getDb(dbUrl);
 getRedis(redisUrl);
@@ -108,6 +115,21 @@ app.setErrorHandler((err, req, reply) => {
 });
 
 app.register(cors, { origin: true });
+if (rateLimitEnabled) {
+  await app.register(rateLimit, {
+    max: rateLimitMax,
+    timeWindow: rateLimitTimeWindowMs,
+    keyGenerator: (request) => {
+      const payload = getAuth(request);
+      if (payload?.tenantId) return `tenant:${payload.tenantId}`;
+      const ip =
+        request.ip ??
+        request.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() ??
+        "unknown";
+      return `ip:${ip}`;
+    },
+  });
+}
 app.register(swagger, {
   openapi: {
     info: { title: "OpenTel API", version: "0.1.0" },
@@ -423,6 +445,54 @@ app.post("/v1/tokens", async (req, reply) => {
     scopes: parsed.data.scopes,
   });
   return reply.send({ token });
+});
+
+// --- Email auth (CCaaS sign up / sign in) ---
+
+app.post("/v1/auth/register", async (req, reply) => {
+  const body = (req as { body?: { email?: string; password?: string; organizationName?: string } }).body;
+  const email = body?.email?.trim();
+  const password = body?.password;
+  if (!email || !password) {
+    throw new OpenTelError("VALIDATION_ERROR", "email and password are required");
+  }
+  if (password.length < 8) {
+    throw new OpenTelError("VALIDATION_ERROR", "password must be at least 8 characters");
+  }
+  const existing = await getUserByEmail(db, email);
+  if (existing) {
+    throw new OpenTelError("VALIDATION_ERROR", "An account with this email already exists");
+  }
+  const orgName = body?.organizationName?.trim() || "My organization";
+  const tenant = await createTenant(db, orgName);
+  const endpoint = await createEndpoint(db, tenant.id, email.split("@")[0] || "agent");
+  const passwordHash = await bcrypt.hash(password, 10);
+  await createUser(db, email, passwordHash, tenant.id, endpoint.id);
+  return reply.status(201).send({
+    message: "Account created. Sign in at /login with your email and password.",
+  });
+});
+
+app.post("/v1/auth/login", async (req, reply) => {
+  const body = (req as { body?: { email?: string; password?: string } }).body;
+  const email = body?.email?.trim();
+  const password = body?.password;
+  if (!email || !password) {
+    throw new OpenTelError("VALIDATION_ERROR", "email and password are required");
+  }
+  const user = await getUserByEmail(db, email);
+  if (!user) {
+    throw new OpenTelError("TOKEN_INVALID", "Invalid email or password");
+  }
+  const ok = await bcrypt.compare(password, user.password_hash);
+  if (!ok) {
+    throw new OpenTelError("TOKEN_INVALID", "Invalid email or password");
+  }
+  const token = mintToken(jwtSecret, {
+    tenantId: user.tenant_id,
+    endpointId: user.endpoint_id,
+  });
+  return reply.send({ token, tenantId: user.tenant_id, endpointId: user.endpoint_id });
 });
 
 app.get("/v1/tenants/:tenantId/calls", async (req, reply) => {

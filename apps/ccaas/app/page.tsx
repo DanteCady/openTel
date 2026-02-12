@@ -1,219 +1,170 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useSession } from "@/context/session-context";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Phone, PhoneOff, User, Headphones } from "lucide-react";
-import { toast } from "sonner";
+import { Logo } from "@/components/logo";
+import { ArrowRight, Phone, Mail, MessageSquare, Zap } from "lucide-react";
 
-function getWsUrl(): string {
-  if (typeof window === "undefined") return "ws://127.0.0.1:3001";
-  const host = window.location.hostname === "localhost" ? "127.0.0.1" : window.location.hostname;
-  return `ws://${host}:3001`;
-}
+export default function HomePage() {
+  const router = useRouter();
+  const { isAuthenticated } = useSession();
 
-export default function CcaasPage() {
-  const [token, setToken] = useState("");
-  const [tenantId, setTenantId] = useState("");
-  const [endpointId, setEndpointId] = useState("");
-  const [targetType, setTargetType] = useState<"endpoint" | "queue">("endpoint");
-  const [targetId, setTargetId] = useState("");
-  const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
-  const [agentState, setAgentState] = useState<"available" | "busy" | "away" | "break">("available");
-  const [incomingCall, setIncomingCall] = useState<{ callId: string; fromEndpointId: string } | null>(null);
-  const [ws, setWs] = useState<WebSocket | null>(null);
-
-  const connect = () => {
-    const t = token.trim();
-    const eid = endpointId.trim();
-    if (!t || !eid) {
-      toast.error("Enter token and endpoint ID");
-      return;
+  useEffect(() => {
+    if (isAuthenticated) {
+      router.replace("/dashboard");
     }
-    const url = `${getWsUrl()}/ws`;
-    setStatus("connecting");
-    const socket = new WebSocket(url);
-    socket.onopen = () => {
-      socket.send(JSON.stringify({ type: "auth", token: t }));
-    };
-    socket.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === "auth_ok") socket.send(JSON.stringify({ type: "register", endpointId: eid }));
-      if (msg.type === "registered") {
-        setStatus("connected");
-        toast.success("Connected");
-      }
-      if (msg.type === "error") {
-        setStatus("error");
-        toast.error(msg.message);
-      }
-      if (msg.type === "incoming_call") {
-        setIncomingCall({ callId: msg.callId, fromEndpointId: msg.fromEndpointId ?? "unknown" });
-        toast.info("Incoming call");
-      }
-      if (msg.type === "call_created") toast.success("Call started");
-    };
-    socket.onerror = () => {
-      setStatus("error");
-      toast.error("Connection failed");
-    };
-    setWs(socket);
-  };
+  }, [isAuthenticated, router]);
 
-  const dial = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      toast.error("Connect first");
-      return;
-    }
-    const id = targetId.trim();
-    if (!id) {
-      toast.error("Enter target ID");
-      return;
-    }
-    const payload =
-      targetType === "queue"
-        ? { type: "dial", toQueueId: id, metadata: {} }
-        : { type: "dial", toEndpointId: id, metadata: {} };
-    ws.send(JSON.stringify(payload));
-  };
+  return !isAuthenticated ? (
+    <div className="min-h-screen bg-zinc-50 text-zinc-900">
+      {/* Header */}
+      <header className="sticky top-0 z-10 border-b border-zinc-200/80 bg-zinc-50/95 backdrop-blur-sm">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
+          <Link href="/" className="flex items-center gap-3">
+            <Logo size="md" className="bg-white shadow-sm ring-1 ring-zinc-200/50" />
+            <span className="text-lg font-semibold tracking-tight text-zinc-900">
+              OpenTel CCaaS
+            </span>
+          </Link>
+          <nav className="flex items-center gap-6">
+            <Link
+              href="/login"
+              className="text-sm font-medium text-zinc-600 transition-colors hover:text-zinc-900"
+            >
+              Sign in
+            </Link>
+            <Link href="/onboarding">
+              <Button
+                size="sm"
+                className="bg-teal-600 font-medium text-white hover:bg-teal-700"
+              >
+                Get started
+              </Button>
+            </Link>
+          </nav>
+        </div>
+      </header>
 
-  const setState = async (state: "available" | "busy" | "away" | "break") => {
-    setAgentState(state);
-    const apiUrl =
-      typeof window !== "undefined"
-        ? `${window?.location?.protocol ?? "http:"}//${window?.location?.hostname ?? "localhost"}:3000`
-        : "http://localhost:3000";
-    try {
-      const res = await fetch(
-        `${apiUrl}/v1/tenants/${tenantId}/endpoints/${endpointId}/state`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ agentState: state }),
-        }
-      );
-      if (!res.ok) throw new Error(await res.text());
-      toast.success(`State: ${state}`);
-    } catch {
-      toast.error("Failed to update state");
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-background p-6">
-      <div className="mx-auto max-w-2xl space-y-6">
-        <h1 className="text-2xl font-semibold">OpenTel CCaaS</h1>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <User className="h-5 w-5" /> Connect
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Input
-              placeholder="Tenant ID"
-              value={tenantId}
-              onChange={(e) => setTenantId(e.target.value)}
-            />
-            <Input
-              placeholder="Token"
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-            />
-            <Input
-              placeholder="Endpoint ID"
-              value={endpointId}
-              onChange={(e) => setEndpointId(e.target.value)}
-            />
-            <Button onClick={connect} disabled={status === "connecting"}>
-              {status === "connecting" ? "Connecting…" : "Connect"}
+      {/* Hero */}
+      <section className="mx-auto max-w-6xl px-4 pt-20 pb-28 text-center md:pt-28 md:pb-36">
+        <h1 className="text-4xl font-bold tracking-tight text-zinc-900 sm:text-5xl md:text-6xl">
+          Contact center, your way
+        </h1>
+        <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-zinc-600">
+          Voice, chat, email, and SMS in one platform. Self-host the open source or use our hosted
+          service—no lock-in.
+        </p>
+        <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
+          <Link href="/onboarding">
+            <Button
+              size="lg"
+              className="gap-2 bg-teal-600 font-medium text-white shadow-lg shadow-teal-600/20 hover:bg-teal-700"
+            >
+              Get started <ArrowRight className="h-4 w-4" />
             </Button>
-            {status === "connected" && (
-              <span className="text-sm text-muted-foreground">Connected</span>
-            )}
-          </CardContent>
-        </Card>
+          </Link>
+          <Link href="/login">
+            <Button
+              size="lg"
+              variant="outline"
+              className="border-zinc-300 font-medium text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900"
+            >
+              Sign in
+            </Button>
+          </Link>
+        </div>
+      </section>
 
-        {status === "connected" && (
-          <>
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Headphones className="h-5 w-5" /> Agent State
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="flex gap-2">
-                {(["available", "busy", "away", "break"] as const).map((s) => (
-                  <Button
-                    key={s}
-                    variant={agentState === s ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setState(s)}
-                  >
-                    {s}
-                  </Button>
-                ))}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Phone className="h-5 w-5" /> Dial
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex gap-2">
-                  <Button
-                    variant={targetType === "endpoint" ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setTargetType("endpoint")}
-                  >
-                    Endpoint
-                  </Button>
-                  <Button
-                    variant={targetType === "queue" ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setTargetType("queue")}
-                  >
-                    Queue
-                  </Button>
+      {/* Features */}
+      <section className="border-t border-zinc-200 bg-white py-24">
+        <div className="mx-auto max-w-6xl px-4">
+          <h2 className="text-center text-3xl font-bold tracking-tight text-zinc-900">
+            One platform for every channel
+          </h2>
+          <p className="mx-auto mt-3 max-w-xl text-center text-zinc-600">
+            Connect your team and your customers across voice, chat, email, and SMS.
+          </p>
+          <div className="mt-16 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              {
+                icon: Phone,
+                title: "Voice",
+                desc: "WebRTC and PSTN. Queues, IVR, and agent workspace.",
+              },
+              {
+                icon: MessageSquare,
+                title: "Chat",
+                desc: "Real-time chat threads and embeddable widget.",
+              },
+              {
+                icon: Mail,
+                title: "Email",
+                desc: "SendGrid, Mailgun, Gmail, Microsoft 365, or your SMTP.",
+              },
+              {
+                icon: Zap,
+                title: "SMS",
+                desc: "Twilio and more. Same API, same dashboard.",
+              },
+            ].map(({ icon: Icon, title, desc }) => (
+              <div
+                key={title}
+                className="group rounded-2xl border border-zinc-200/80 bg-zinc-50/50 p-6 transition-colors hover:border-teal-200 hover:bg-teal-50/30"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-100 text-teal-600 transition-colors group-hover:bg-teal-200">
+                  <Icon className="h-5 w-5" />
                 </div>
-                <Input
-                  placeholder={targetType === "queue" ? "Queue ID" : "Endpoint ID"}
-                  value={targetId}
-                  onChange={(e) => setTargetId(e.target.value)}
-                />
-                <Button onClick={dial}>
-                  <Phone className="mr-2 h-4 w-4" /> Dial
-                </Button>
-              </CardContent>
-            </Card>
+                <h3 className="mt-4 font-semibold text-zinc-900">{title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">{desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
-            {incomingCall && (
-              <Card className="border-primary">
-                <CardHeader>
-                  <CardTitle>Incoming Call</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm">From: {incomingCall.fromEndpointId}</p>
-                  <div className="mt-4 flex gap-2">
-                    <Button>
-                      <Phone className="mr-2 h-4 w-4" /> Answer
-                    </Button>
-                    <Button variant="destructive">
-                      <PhoneOff className="mr-2 h-4 w-4" /> Reject
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </>
-        )}
-      </div>
+      {/* CTA */}
+      <section className="border-t border-zinc-200 bg-zinc-50 py-24">
+        <div className="mx-auto max-w-6xl px-4 text-center">
+          <h2 className="text-3xl font-bold tracking-tight text-zinc-900">
+            Ready to get started?
+          </h2>
+          <p className="mt-3 text-zinc-600">
+            Create your organization and invite your team in minutes.
+          </p>
+          <div className="mt-10 flex justify-center gap-4">
+            <Link href="/onboarding">
+              <Button
+                size="lg"
+                className="bg-teal-600 font-medium text-white shadow-lg shadow-teal-600/20 hover:bg-teal-700"
+              >
+                Start free
+              </Button>
+            </Link>
+            <Link href="/login">
+              <Button
+                size="lg"
+                variant="outline"
+                className="border-zinc-300 font-medium text-zinc-700 hover:bg-white hover:text-zinc-900"
+              >
+                Sign in
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      <footer className="border-t border-zinc-200 bg-white py-8">
+        <div className="mx-auto max-w-6xl px-4 text-center text-sm text-zinc-500">
+          OpenTel CCaaS — contact center for voice, chat, email, and SMS.
+        </div>
+      </footer>
+    </div>
+  ) : (
+    <div className="flex min-h-screen items-center justify-center bg-background">
+      <p className="text-sm text-muted-foreground">Redirecting...</p>
     </div>
   );
 }

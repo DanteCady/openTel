@@ -108,6 +108,14 @@ export interface Database {
     metadata: Record<string, string> | null;
     created_at: Date;
   };
+  users: {
+    id: string;
+    email: string;
+    password_hash: string;
+    tenant_id: string;
+    endpoint_id: string;
+    created_at: Date;
+  };
 }
 
 let db: Kysely<Database> | null = null;

@@ -30,6 +30,9 @@ async function migrate() {
     const { up: up7 } = await import("./migrations/007_sms.postgres.js");
     await up7(db);
     console.log("Ran 007_sms (postgres)");
+    const { up: up8 } = await import("./migrations/008_users.postgres.js");
+    await up8(db);
+    console.log("Ran 008_users (postgres)");
   } else {
     const { up: up1 } = await import("./migrations/001_initial.mysql.js");
     await up1(db);
@@ -46,6 +49,9 @@ async function migrate() {
     const { up: up7 } = await import("./migrations/007_sms.mysql.js");
     await up7(db);
     console.log("Ran 007_sms (mysql)");
+    const { up: up8 } = await import("./migrations/008_users.mysql.js");
+    await up8(db);
+    console.log("Ran 008_users (mysql)");
   }
 
   await db.destroy();

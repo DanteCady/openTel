@@ -124,7 +124,36 @@ if (isPhase2Enabled() && inboundTenantId && inboundDefaultEndpointId) {
   });
 }
 
+const inboundSecret = process.env.OPENTEL_INBOUND_SECRET?.trim();
+const inboundAllowedIps = process.env.OPENTEL_INBOUND_ALLOWED_IPS?.trim()
+  ? process.env.OPENTEL_INBOUND_ALLOWED_IPS.split(",").map((s) => s.trim()).filter(Boolean)
+  : null;
+
+function checkInboundAuth(
+  req: { ip?: string; headers?: { [k: string]: string | undefined } },
+  reply: { status: (code: number) => { send: (body: object) => unknown } }
+): boolean {
+  if (inboundAllowedIps && inboundAllowedIps.length > 0) {
+    const clientIp = req.ip ?? req.headers?.["x-forwarded-for"]?.split(",")[0]?.trim() ?? "";
+    if (!clientIp || !inboundAllowedIps.includes(clientIp)) {
+      reply.status(403).send({ error: "Forbidden: IP not allowed" });
+      return false;
+    }
+  }
+  if (inboundSecret) {
+    const headerSecret = req.headers?.["x-inbound-secret"] ?? (req.headers?.authorization?.startsWith("Bearer ")
+      ? req.headers.authorization.slice(7)
+      : undefined);
+    if (headerSecret !== inboundSecret) {
+      reply.status(401).send({ error: "Unauthorized: invalid or missing inbound secret" });
+      return false;
+    }
+  }
+  return true;
+}
+
 app.post("/inbound-call", async (req, reply) => {
+  if (!checkInboundAuth(req as { ip?: string; headers?: { [k: string]: string | undefined } }, reply)) return;
   try {
     const body = (req as { body?: { callerId?: string; dialedNumber?: string; channelUuid?: string; routingHint?: string } }).body;
     const callerId = body?.callerId ?? body?.dialedNumber ?? "";

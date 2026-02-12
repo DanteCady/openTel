@@ -52,17 +52,51 @@ export async function close(): Promise<void> {
   }
 }
 
+const WEBHOOK_MAX_ATTEMPTS = 3;
+const WEBHOOK_INITIAL_BACKOFF_MS = 500;
+
+function redactUrlForLog(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return "(invalid-url)";
+  }
+}
+
 export async function deliverWebhook(
   webhookUrl: string,
   event: string,
   payload: object
 ): Promise<void> {
   const body = { event, payload, ts: new Date().toISOString() };
-  fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).catch(() => {
-    // fire-and-forget; log in caller if needed
-  });
+  const urlForLog = redactUrlForLog(webhookUrl);
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= WEBHOOK_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) return;
+      lastError = new Error(`HTTP ${res.status} ${res.statusText}`);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+    if (attempt < WEBHOOK_MAX_ATTEMPTS) {
+      const backoffMs = WEBHOOK_INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  const errMsg = lastError?.message ?? "unknown";
+  console.error(
+    JSON.stringify({
+      msg: "webhook delivery failed after retries",
+      event,
+      webhook: urlForLog,
+      attempts: WEBHOOK_MAX_ATTEMPTS,
+      lastError: errMsg,
+    })
+  );
 }

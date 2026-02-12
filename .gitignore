@@ -38,5 +38,9 @@ coverage/
 .next/
 out/
 
+# Docs (optional local)
+docs/READINESS.md
+docs/PHASE2_PSTN.md
+
 # Misc
 *.pem
